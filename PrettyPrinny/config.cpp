@@ -26,13 +26,17 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.0.2";
+std::wstring PPRINNY_VER_STR = L"0.0.3";
 pp_config_s config;
 
 struct {
   pp::ParameterInt*     msaa_samples;
   pp::ParameterInt*     msaa_quality;
   pp::ParameterInt*     refresh_rate;
+  pp::ParameterInt*     scene_res_x;
+  pp::ParameterInt*     scene_res_y;
+  pp::ParameterInt*     swap_interval;
+  pp::ParameterBool*    adaptive;
 } render;
 
 struct {
@@ -119,6 +123,46 @@ PPrinny_LoadConfig (std::wstring name) {
     dll_ini,
       L"PrettyPrinny.Render",
         L"RefreshRate" );
+
+  render.scene_res_x =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Scene Resolution (X)")
+      );
+  render.scene_res_x->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Render",
+        L"SceneResX" );
+
+  render.scene_res_y =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Scene Resolution (Y)")
+      );
+  render.scene_res_y->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Render",
+        L"SceneResY" );
+
+  render.swap_interval =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Swap Interval (VSYNC)")
+      );
+  render.swap_interval->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Render",
+        L"SwapInterval" );
+
+  //render.adaptive =
+    //static_cast <pp::ParameterBool *>
+      //(g_ParameterFactory.create_parameter <bool> (
+        //L"Adaptive VSYNC")
+      //);
+  //render.adaptive->register_to_ini (
+    //dll_ini,
+      //L"PrettyPrinny.Render",
+        //L"Adaptive" );
 
 
   window.borderless =
@@ -281,6 +325,19 @@ PPrinny_LoadConfig (std::wstring name) {
   if (render.refresh_rate->load ())
     config.render.refresh_rate = render.refresh_rate->get_value ();
 
+  if (render.scene_res_x->load ())
+    config.render.scene_res_x = render.scene_res_x->get_value ();
+
+  if (render.scene_res_y->load ())
+    config.render.scene_res_y = render.scene_res_y->get_value ();
+
+  if (render.swap_interval->load ())
+    config.render.swap_interval = render.swap_interval->get_value ();
+
+  //if (render.adaptive->load ())
+    //config.render.adaptive = render.adaptive->get_value ();
+
+
 
   if (window.borderless->load ())
     config.window.borderless = window.borderless->get_value ();
@@ -346,6 +403,7 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   //render.allow_background->set_value  (config.render.allow_background);
   //render.allow_background->store      ();
 
+#if 0
   render.msaa_samples->set_value      (config.render.msaa_samples);
   render.msaa_samples->store          ();
 
@@ -354,17 +412,35 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
 
   render.refresh_rate->set_value      (config.render.refresh_rate);
   render.refresh_rate->store          ();
+#endif
+
+  render.scene_res_x->set_value       (config.render.scene_res_x);
+  render.scene_res_x->store           ();
+
+  render.scene_res_y->set_value       (config.render.scene_res_y);
+  render.scene_res_y->store           ();
+
+  render.swap_interval->set_value     (config.render.swap_interval);
+  render.swap_interval->store         ();
+
+  //render.adaptive->set_value          (config.render.adaptive);
+  //render.adaptive->store              ();
 
 
+#if 0
   window.borderless->set_value        (config.window.borderless);
   window.borderless->store            ();
+#endif
 
+#if 0
   window.foreground_fps->set_value    (config.window.foreground_fps);
   window.foreground_fps->store        ();
 
   window.background_fps->set_value    (config.window.background_fps);
   window.background_fps->store        ();
+#endif
 
+#if 0
   window.center->set_value            (config.window.center);
   window.center->store                ();
 
@@ -373,7 +449,7 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
 
   window.y_offset->set_value          (config.window.y_offset);
   window.y_offset->store              ();
-
+#endif
 
   stutter.tolerance->set_value        (config.stutter.tolerance);
   stutter.tolerance->store            ();

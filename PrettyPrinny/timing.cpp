@@ -191,7 +191,7 @@ pp::TimingFix::Init (void)
     }
   }
 
-  HMODULE hModKernel32 = GetModuleHandle (L"kernel32.dll");
+  HMODULE hModKernel32 = LoadLibrary (L"kernel32.dll");//GetModuleHandle (config.system.injector.c_str ());
 
   QueryPerformanceCounter_Original =
     (QueryPerformanceCounter_pfn)

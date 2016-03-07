@@ -155,12 +155,6 @@ SetWindowPos_Detour(
 #endif
 }
 
-// PROBABLY REMOVE ME
-#if 0
-#include <tchar.h>
-#include <tpcshrd.h>
-#endif
-
 LONG
 WINAPI
 SetWindowLongA_Detour (
@@ -169,6 +163,27 @@ SetWindowLongA_Detour (
   _In_ LONG dwNewLong
 )
 {
+  pp::window.hwnd           = hWnd;//GetForegroundWindow_Original ();
+  pp::RenderFix::hWndDevice = hWnd;//GetForegroundWindow_Original ();
+
+  // Setup window message detouring as soon as a window is created..
+  if (pp::window.WndProc_Original == nullptr) {
+    pp::window.WndProc_Original =
+      (WNDPROC)GetWindowLongPtr (pp::RenderFix::hWndDevice, GWLP_WNDPROC);
+
+    extern LRESULT
+    CALLBACK
+    DetourWindowProc ( _In_  HWND   hWnd,
+                       _In_  UINT   uMsg,
+                       _In_  WPARAM wParam,
+                       _In_  LPARAM lParam );
+
+    SetWindowLongPtrA ( pp::RenderFix::hWndDevice,
+                          GWLP_WNDPROC,
+                            (LONG_PTR)DetourWindowProc );
+  }
+
+
   if (nIndex == GWL_EXSTYLE || nIndex == GWL_STYLE) {
     dll_log.Log ( L"[Window Mgr] SetWindowLongA (0x%06X, %s, 0x%06X)",
                     hWnd,
@@ -177,6 +192,8 @@ SetWindowLongA_Detour (
                       dwNewLong );
   }
 
+// TODO: Restore this functionality
+#if 0
   // Override window styles
   if (nIndex == GWL_STYLE || nIndex == GWL_EXSTYLE) {
     // For proper return behavior
@@ -188,6 +205,7 @@ SetWindowLongA_Detour (
 
     return dwOldStyle;
   }
+#endif
 
   return SetWindowLongA_Original (hWnd, nIndex, dwNewLong);
 }
@@ -253,6 +271,9 @@ pp::WindowManager::BorderManager::AdjustWindow (void)
 
   GetMonitorInfo (hMonitor, &mi);
 
+  BringWindowToTop (window.hwnd);
+  SetActiveWindow  (window.hwnd);
+
   if (pp::RenderFix::fullscreen) {
     //dll_log.Log (L"BorderManager::AdjustWindow - Fullscreen");
 
@@ -308,9 +329,6 @@ pp::WindowManager::BorderManager::AdjustWindow (void)
   }
 
   ShowWindow (window.hwnd, SW_SHOW);
-
-  BringWindowToTop (window.hwnd);
-  SetActiveWindow  (window.hwnd);
 }
 
 void
@@ -338,9 +356,11 @@ GetForegroundWindow_Detour (void)
 {
   //dll_log.Log (L"[Window Mgr][!] GetForegroundWindow (...)");
 
+#if 0
   if (config.render.allow_background) {
     return pp::RenderFix::hWndDevice;
   }
+#endif
 
   return GetForegroundWindow_Original ();
 }
@@ -367,8 +387,9 @@ DetourWindowProc ( _In_  HWND   hWnd,
                    _In_  LPARAM lParam )
 {
   bool last_active = pp::window.active;
-  pp::window.active = GetForegroundWindow_Original () == pp::window.hwnd ||
-                      GetForegroundWindow_Original () == nullptr;
+
+  pp::window.active = GetForegroundWindow_Original () == pp::window.hwnd/* ||
+                      GetForegroundWindow_Original () == nullptr*/;
 
   bool console_visible   =
     pp::InputManager::Hooker::getInstance ()->isVisible ();
@@ -390,6 +411,8 @@ DetourWindowProc ( _In_  HWND   hWnd,
 
     eTB_VarStub <float>* pOriginalLimit = (eTB_VarStub <float>*)result.getVariable ();
 #endif
+
+#if 0
     // Went from active to inactive (enforce background limit)
     if (! pp::window.active)
       pCommandProc->ProcessCommandFormatted ("TargetFPS %f", config.window.background_fps);
@@ -398,6 +421,7 @@ DetourWindowProc ( _In_  HWND   hWnd,
     else {
       pCommandProc->ProcessCommandFormatted ("TargetFPS %f", config.window.foreground_fps);
     }
+#endif
 
 #if 0
     // Unrestrict the mouse when the app is deactivated
@@ -447,7 +471,8 @@ DetourWindowProc ( _In_  HWND   hWnd,
       return DefWindowProc (hWnd, uMsg, wParam, lParam);
   }
 
-  // Block the menu key from messing with stuff
+#if 0
+  // Block the menu key from messing with stuff*
   if (config.input.block_left_alt &&
       (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP)) {
     // Make an exception for Alt+Enter, for fullscreen mode toggle.
@@ -455,6 +480,7 @@ DetourWindowProc ( _In_  HWND   hWnd,
     if (wParam != VK_RETURN && wParam != VK_F4)
       return DefWindowProc (hWnd, uMsg, wParam, lParam);
   }
+#endif
 
   return CallWindowProc (pp::window.WndProc_Original, hWnd, uMsg, wParam, lParam);
 }
@@ -464,7 +490,6 @@ DetourWindowProc ( _In_  HWND   hWnd,
 void
 pp::WindowManager::Init (void)
 {
-#if 0
   if (config.window.borderless)
     window.style = 0x10000000;
   else
@@ -474,6 +499,7 @@ pp::WindowManager::Init (void)
                           SetWindowLongA_Detour,
                 (LPVOID*)&SetWindowLongA_Original );
 
+#if 0
   PPrinny_CreateDLLHook ( L"user32.dll", "SetWindowPos",
                           SetWindowPos_Detour,
                 (LPVOID*)&SetWindowPos_Original );
@@ -481,21 +507,18 @@ pp::WindowManager::Init (void)
  PPrinny_CreateDLLHook ( L"user32.dll", "MoveWindow",
                          MoveWindow_Detour,
                (LPVOID*)&MoveWindow_Original );
+#endif
 
-// Not used by ToS
   PPrinny_CreateDLLHook ( L"user32.dll", "GetForegroundWindow",
                           GetForegroundWindow_Detour,
                 (LPVOID*)&GetForegroundWindow_Original );
 
+#if 0
 // Used, but not for anything important...
   PPrinny_CreateDLLHook ( L"user32.dll", "GetFocus",
                           GetFocus_Detour,
                 (LPVOID*)&GetFocus_Original );
-#endif
 
-
-// Not used by ToS
-#if 0
   PPrinny_CreateDLLHook ( L"user32.dll", "IsIconic",
                           IsIconic_Detour,
                 (LPVOID*)&IsIconic_Original );
@@ -575,4 +598,4 @@ bool
 }
 
 pp::WindowManager::CommandProcessor*
-   pp::WindowManager::CommandProcessor::pCommProc;
+   pp::WindowManager::CommandProcessor::pCommProc = nullptr;

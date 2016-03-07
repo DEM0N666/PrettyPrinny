@@ -175,7 +175,7 @@ namespace pp
 
       static CommandProcessor* getInstance (void)
       {
-        if (pCommProc == NULL)
+        if (pCommProc == nullptr)
           pCommProc = new CommandProcessor ();
 
         return pCommProc;

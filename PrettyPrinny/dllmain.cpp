@@ -73,9 +73,6 @@ DllThread (LPVOID user)
   SK_SetPluginName = 
     (SK_SetPluginName_pfn)
       GetProcAddress (hInjectorDLL, "SK_SetPluginName");
-  SK_GetCommandProcessor =
-    (SK_GetCommandProcessor_pfn)
-      GetProcAddress (hInjectorDLL, "SK_GetCommandProcessor");
 
   //
   // If this is NULL, the injector system isn't working right!!!
@@ -92,8 +89,8 @@ DllThread (LPVOID user)
   // Plugin State
   if (PPrinny_Init_MinHook () == MH_OK) {
     pp::TimingFix::Init     ();
-    pp::WindowManager::Init ();
     pp::InputManager::Init  ();
+    pp::WindowManager::Init ();
     pp::RenderFix::Init     ();
   }
 
@@ -110,7 +107,7 @@ DllMain (HMODULE hModule,
   {
     case DLL_PROCESS_ATTACH:
     {
-      DisableThreadLibraryCalls ((hDLLMod = hModule));
+      hDLLMod = hModule;
 
       // This is safe because this DLL is never loaded at launch, it is always
       //   loaded from OpenGL32.dll

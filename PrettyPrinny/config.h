@@ -34,6 +34,11 @@ struct pp_config_s
     int      msaa_quality      = 0;
     int      refresh_rate      = 0;
 
+    int      scene_res_x       = 1280;
+    int      scene_res_y       = 720;
+
+    int      swap_interval     = 1;
+
     bool     conservative_msaa = true;
   } render;
 
@@ -66,7 +71,7 @@ struct pp_config_s
   struct {
     bool block_left_alt  = false;
     bool block_left_ctrl = false;
-    bool block_windows   = true;
+    bool block_windows   = false;
     bool block_all_keys  = false;
   } input;
 

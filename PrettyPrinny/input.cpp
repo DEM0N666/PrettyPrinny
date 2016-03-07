@@ -626,13 +626,13 @@ pp::InputManager::Init (void)
   // Win32 API Input Hooks
   //
 
-  // If DirectInput isn't going to hook this, we'll do it ourself
   HookRawInput ();
 
   PPrinny_CreateDLLHook ( L"user32.dll", "GetAsyncKeyState",
                           GetAsyncKeyState_Detour,
                 (LPVOID*)&GetAsyncKeyState_Original );
 
+#if 0
   PPrinny_CreateDLLHook ( L"user32.dll", "ClipCursor",
                           ClipCursor_Detour,
                 (LPVOID*)&ClipCursor_Original );
@@ -654,6 +654,7 @@ pp::InputManager::Init (void)
   PPrinny_CreateDLLHook ( L"user32.dll", "SetPhysicalCursorPos",
                           SetPhysicalCursorPos_Detour,
                 (LPVOID*)&SetPhysicalCursorPos_Original );
+#endif
 
   pp::InputManager::Hooker* pHook =
     pp::InputManager::Hooker::getInstance ();
@@ -760,15 +761,12 @@ pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
     // Ugly hack, but a different window might be in the foreground...
     if (dwProc != GetCurrentProcessId ()) {
       //dll_log.Log (L" *** Tried to hook the wrong process!!!");
-      Sleep (83);
+      Sleep (5000);
       continue;
     }
 
     break;
   }
-
-  //pp::WindowManager::Init ();
-  pp::RenderFix::hWndDevice = GetForegroundWindow ();
 
   // Defer initialization of the Window Message redirection stuff until
   //   we have an actual window!
@@ -835,7 +833,7 @@ pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
                     timeGetTime () - dwTime );
 
   while (true) {
-    Sleep (10);
+    Sleep (15);
   }
   //193 - 199
 
@@ -1039,7 +1037,7 @@ PPrinny_DrawCommandConsole (void)
 }
 
 
-pp::InputManager::Hooker* pp::InputManager::Hooker::pInputHook;
+pp::InputManager::Hooker* pp::InputManager::Hooker::pInputHook = nullptr;
 
 char                      pp::InputManager::Hooker::text [4096];
 

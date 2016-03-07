@@ -60,7 +60,7 @@ namespace pp
     public:
       static Hooker* getInstance (void)
       {
-        if (pInputHook == NULL)
+        if (pInputHook == nullptr)
           pInputHook = new Hooker ();
 
         return pInputHook;

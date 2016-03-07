@@ -507,6 +507,8 @@ eTB_VarStub <float>::getValueString (void) const
 }
 
 
+#include <Windows.h>
+
 //
 // In case the injector's command processor is not workable
 // t
@@ -517,7 +519,16 @@ FALLBACK_GetCommandProcessor (void)
   static eTB_CommandProcessor* command = nullptr;
 
   if (command == nullptr) {
-    command = new eTB_CommandProcessor ();
+    //
+    // The ABI is stable, so we don't need this hack
+    //
+    //command = new eTB_CommandProcessor ();
+
+    SK_GetCommandProcessor_pfn SK_GetCommandProcessorFromDLL =
+      (SK_GetCommandProcessor_pfn)
+        GetProcAddress (LoadLibrary (L"OpenGL32.dll"), "SK_GetCommandProcessor");
+
+    command = SK_GetCommandProcessorFromDLL ();
   }
 
   return command;
