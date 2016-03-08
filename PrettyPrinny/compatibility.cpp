@@ -20,6 +20,8 @@
 **/
 #include <Windows.h>
 
+#include "config.h"
+
 #include "hook.h"
 #include "log.h"
 
@@ -116,6 +118,31 @@ LoadLibraryW_Detour (LPCWSTR lpFileName)
     return NULL;
 
   HMODULE hModEarly = GetModuleHandleW (lpFileName);
+
+
+  if (hModEarly == NULL && config.compatibility.bypass_intel_gl && StrStrIW (lpFileName, L"ig75icd32")) {
+    dll_log.LogEx (true, L"[OGL Driver] Bypassing Intel driver (ig75icd32.dll)... ");
+
+
+    HMODULE hModGL_AMD = LoadLibraryW_Original (L"atioglxx.dll");
+
+    if (hModGL_AMD != nullptr) {
+      dll_log.LogEx (false, L"success! (atioglxx.dll [AMD])\n");
+      return hModGL_AMD;
+    }
+
+
+    HMODULE hModGL_NV = LoadLibraryW_Original (L"nvoglv32.dll");
+
+    if (hModGL_NV != nullptr) {
+      dll_log.LogEx (false, L"success! (nvoglv32.dll [NVIDIA])\n");
+      return hModGL_NV;
+    }
+
+
+    dll_log.LogEx (false, L"failed! (You are stuck with Intel)\n");
+  }
+
 
   if (hModEarly == NULL && BlacklistLibraryW (lpFileName))
     return NULL;

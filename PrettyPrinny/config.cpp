@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.0.3";
+std::wstring PPRINNY_VER_STR = L"0.0.4";
 pp_config_s config;
 
 struct {
@@ -38,6 +38,12 @@ struct {
   pp::ParameterInt*     swap_interval;
   pp::ParameterBool*    adaptive;
 } render;
+
+struct {
+  pp::ParameterBool*    bypass_intel_gl;
+  pp::ParameterBool*    support_old_drivers;
+  pp::ParameterBool*    debug_mode;
+} compatibility;
 
 struct {
   pp::ParameterBool*    borderless;
@@ -163,6 +169,39 @@ PPrinny_LoadConfig (std::wstring name) {
     //dll_ini,
       //L"PrettyPrinny.Render",
         //L"Adaptive" );
+
+
+
+  compatibility.bypass_intel_gl =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Bypass Intel ICD")
+      );
+  compatibility.bypass_intel_gl->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Compatibility",
+        L"BypassIntelGL" );
+
+  compatibility.support_old_drivers =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Disable Modern Features")
+      );
+  compatibility.support_old_drivers->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Compatibility",
+        L"ForceGL3_1Mode" );
+
+  compatibility.debug_mode =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Disable Modern Features")
+      );
+  compatibility.debug_mode->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Compatibility",
+        L"Debug" );
+
 
 
   window.borderless =
@@ -338,6 +377,16 @@ PPrinny_LoadConfig (std::wstring name) {
     //config.render.adaptive = render.adaptive->get_value ();
 
 
+  if (compatibility.bypass_intel_gl->load ())
+    config.compatibility.bypass_intel_gl = compatibility.bypass_intel_gl->get_value ();
+
+  if (compatibility.support_old_drivers->load ())
+    config.compatibility.support_old_drivers = compatibility.support_old_drivers->get_value ();
+
+  if (compatibility.debug_mode->load ())
+    config.compatibility.debug_mode = compatibility.debug_mode->get_value ();
+
+
 
   if (window.borderless->load ())
     config.window.borderless = window.borderless->get_value ();
@@ -414,17 +463,23 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   render.refresh_rate->store          ();
 #endif
 
-  render.scene_res_x->set_value       (config.render.scene_res_x);
-  render.scene_res_x->store           ();
+  render.scene_res_x->set_value        (config.render.scene_res_x);
+  render.scene_res_x->store            ();
 
-  render.scene_res_y->set_value       (config.render.scene_res_y);
-  render.scene_res_y->store           ();
+  render.scene_res_y->set_value        (config.render.scene_res_y);
+  render.scene_res_y->store            ();
 
-  render.swap_interval->set_value     (config.render.swap_interval);
-  render.swap_interval->store         ();
+  render.swap_interval->set_value      (config.render.swap_interval);
+  render.swap_interval->store          ();
 
   //render.adaptive->set_value          (config.render.adaptive);
   //render.adaptive->store              ();
+
+
+  compatibility.bypass_intel_gl->set_value
+                                       (config.compatibility.bypass_intel_gl);
+  compatibility.bypass_intel_gl->store ();
+
 
 
 #if 0

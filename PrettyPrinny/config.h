@@ -28,32 +28,39 @@ extern std::wstring PPRINNY_VER_STR;
 
 struct pp_config_s
 {
-  struct {
-    bool     allow_background  = true;
-    int      msaa_samples      = 0;
-    int      msaa_quality      = 0;
-    int      refresh_rate      = 0;
+  struct {  
+    bool     allow_background    = true;
+    int      msaa_samples        = 0;
+    int      msaa_quality        = 0;
+    int      refresh_rate        = 0;
 
-    int      scene_res_x       = 1280;
-    int      scene_res_y       = 720;
+    int      scene_res_x         = 1280;
+    int      scene_res_y         = 720;
 
-    int      swap_interval     = 1;
+    int      swap_interval       = 1;
 
-    bool     conservative_msaa = true;
+    bool     conservative_msaa   = true;
   } render;
 
   struct {
-    bool     disable_bg_msaa   = true; // NV compatibility hack
-    bool     borderless        = true;
-    float    foreground_fps    = 30.0f; // 0.0 = Unlimited
-    float    background_fps    = 30.0f;
-    bool     center            = true;
-    int      x_offset          = 0;
-    int      y_offset          = 0;
+    bool     bypass_intel_gl     = true;
+    bool     allow_gl_cpu_sync   = true;
+    bool     debug_mode          = false;
+    bool     support_old_drivers = false;
+  } compatibility;
+
+  struct {
+    bool     disable_bg_msaa     = true; // NV compatibility hack
+    bool     borderless          = true;
+    float    foreground_fps      = 30.0f; // 0.0 = Unlimited
+    float    background_fps      = 30.0f;
+    bool     center              = true;
+    int      x_offset            = 0;
+    int      y_offset            = 0;
   } window;
 
   struct {
-    float    tolerance        = 0.333333f; // 33%
+    float    tolerance           = 0.333333f; // 33%
   } stutter;
 
   struct {
