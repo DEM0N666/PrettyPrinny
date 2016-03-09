@@ -89,10 +89,10 @@ DllThread (LPVOID user)
   // Plugin State
   if (PPrinny_Init_MinHook () == MH_OK) {
     pp::RenderFix::Init     ();
+    pp::InputManager::Init  ();
 
     pp::TimingFix::Init     ();
 
-    pp::InputManager::Init  ();
     pp::WindowManager::Init ();
   }
 

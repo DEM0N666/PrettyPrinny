@@ -41,6 +41,16 @@ bool early_resolve = false;
 
 bool drawing_main_scene = false;
 
+
+#include <gl/GL.h>
+#pragma comment (lib, "OpenGL32.lib")
+
+GLuint active_program = 0;
+
+GLuint csprite_program = 0; // Character
+GLuint wsprite_program = 0; // World
+
+
 BMF_BeginBufferSwap_pfn BMF_BeginBufferSwap = nullptr;
 
 COM_DECLSPEC_NOTHROW
@@ -50,14 +60,32 @@ OGLEndFrame_Pre (void)
 {
   //pp::RenderFix::dwRenderThreadID = GetCurrentThreadId ();
 
+  active_program  = 0;
+  csprite_program = 0;
+  wsprite_program = 0;
+
   void PPrinny_DrawCommandConsole (void);
   PPrinny_DrawCommandConsole ();
 
   return BMF_BeginBufferSwap ();
 }
 
-#include <gl/GL.h>
-#pragma comment (lib, "OpenGL32.lib")
+BMF_EndBufferSwap_pfn BMF_EndBufferSwap = nullptr;
+
+COM_DECLSPEC_NOTHROW
+HRESULT
+STDMETHODCALLTYPE
+OGLEndFrame_Post (HRESULT hr, IUnknown* pDev)
+{
+  if (pp::RenderFix::tracer.count > 0) {
+    if (--pp::RenderFix::tracer.count == 0)
+      pp::RenderFix::tracer.log = false;
+  }
+
+  return BMF_EndBufferSwap (S_OK, nullptr);
+}
+
+
 
 typedef BOOL (WINAPI *wglSwapIntervalEXT_pfn)(int interval);
 
@@ -86,6 +114,57 @@ wglSwapIntervalEXT_Detour (int interval)
 }
 
 
+bool real_blend_state   = false;
+bool real_alpha_state   = false;
+
+GLenum  real_alpha_test = GL_ALWAYS;
+GLfloat real_alpha_ref  = 1.0f;
+
+GLenum src_blend, dst_blend;
+
+bool texture_2d = false;
+
+typedef GLvoid (WINAPI *glUseProgram_pfn)(GLuint program);
+glUseProgram_pfn glUseProgram_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glUseProgram_Detour (GLuint program)
+{
+  active_program = program;
+
+  glUseProgram_Original (program);
+}
+
+
+typedef GLvoid (WINAPI *glBlendFunc_pfn)(GLenum srcfactor, GLenum dstfactor);
+glBlendFunc_pfn glBlendFunc_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glBlendFunc_Detour (GLenum srcfactor, GLenum dstfactor)
+{
+  src_blend = srcfactor;
+  dst_blend = dstfactor;
+
+  glBlendFunc_Original (srcfactor, dstfactor);
+}
+
+typedef GLvoid (WINAPI *glAlphaFunc_pfn)(GLenum alpha_test, GLfloat ref_val);
+glAlphaFunc_pfn glAlphaFunc_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glAlphaFunc_Detour (GLenum alpha_test, GLfloat ref_val)
+{
+  real_alpha_test = alpha_test;
+  real_alpha_ref  = ref_val;
+
+  glAlphaFunc_Original (alpha_test, ref_val);
+}
 
 typedef GLvoid (WINAPI *glEnable_pfn)(GLenum cap);
 typedef GLvoid (WINAPI *glDisable_pfn)(GLenum cap);
@@ -101,6 +180,11 @@ glEnable_Detour (GLenum cap)
   // This invalid state setup is embedded in some display lists
   if (cap == GL_TEXTURE) cap = GL_TEXTURE_2D;
 
+  if (cap == GL_TEXTURE_2D) texture_2d = true;
+
+  if (cap == GL_BLEND)      real_blend_state = true;
+  if (cap == GL_ALPHA_TEST) real_alpha_state = true;
+
   return glEnable_Original (cap);
 }
 
@@ -112,8 +196,151 @@ glDisable_Detour (GLenum cap)
   // This invalid state setup is embedded in some display lists
   if (cap == GL_TEXTURE) cap = GL_TEXTURE_2D;
 
+  if (cap == GL_TEXTURE_2D) texture_2d = false;
+
+  if (cap == GL_BLEND)      real_blend_state = false;
+  if (cap == GL_ALPHA_TEST) real_alpha_state = false;
+
   return glDisable_Original (cap);
 }
+
+
+typedef GLvoid (WINAPI *glTexParameteri_pfn)(
+  GLuint texture,
+  GLenum pname,
+  GLint  param
+);
+
+glTexParameteri_pfn glTexParameteri_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glTexParameteri_Detour (
+  GLuint texture,
+  GLenum pname,
+  GLint  param
+)
+{
+#if 0
+  if ( pname == GL_TEXTURE_WRAP_S ||
+       pname == GL_TEXTURE_WRAP_T ) {
+    if (param != GL_REPEAT) {
+#define GL_CLAMP_TO_EDGE 0x812F 
+      param = GL_CLAMP_TO_EDGE;
+      //dll_log.Log (L"Replaced Clamp with Clamp To Edge");
+    //}
+  }
+#endif
+
+  return glTexParameteri_Original (texture, pname, param);
+}
+
+
+
+typedef GLvoid (WINAPI *glCompressedTexImage2D_pfn)(
+        GLenum  target, 
+        GLint   level,
+        GLenum  internalformat,
+        GLsizei width,
+        GLsizei height,
+        GLint   border,
+        GLsizei imageSize, 
+  const GLvoid* data
+);
+glCompressedTexImage2D_pfn glCompressedTexImage2D_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glCompressedTexImage2D_Detour (
+        GLenum  target, 
+        GLint   level,
+        GLenum  internalFormat,
+        GLsizei width,
+        GLsizei height,
+        GLint   border,
+        GLsizei imageSize, 
+  const GLvoid* data )
+{
+#if 0
+  dll_log.Log ( L"[GL Texture] Loaded Compressed Texture: Level=%li, (%lix%li) {%5.2f KiB}",
+                  level, width, height, (float)imageSize / 1024.0f );
+#endif
+
+  return glCompressedTexImage2D_Original (
+    target, level,
+      internalFormat,
+        width, height,
+          border,
+            imageSize, data );
+}
+
+
+typedef GLvoid (WINAPI *glDrawArrays_pfn)(GLenum mode, GLint first, GLsizei count);
+glDrawArrays_pfn glDrawArrays_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
+{
+  bool fringed = false;
+
+  //
+  // The stuff this does, holy crap ... it will torture the GL state machine, so focus heavily on
+  //   client-side detection heuristics.
+  //
+  if (config.render.fringe_removal) {
+    bool world  = (mode == GL_TRIANGLES && count < 180);//      && count == 6);
+    bool sprite = (mode == GL_TRIANGLE_STRIP && count == 4);
+
+     GLboolean depth_mask;
+     glGetBooleanv (GL_DEPTH_WRITEMASK, &depth_mask);
+
+    if (drawing_main_scene && depth_mask && texture_2d && ( world || sprite )) {
+      GLint filter;
+      glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &filter);
+
+      if (filter == GL_LINEAR) {
+       glPushAttrib (GL_COLOR_BUFFER_BIT);
+
+       glDepthMask (GL_FALSE);
+       {
+         glEnable_Original (GL_ALPHA_TEST);
+
+         if (sprite)
+           glAlphaFunc_Original (GL_LESS, 0.5f);
+         else
+           glAlphaFunc_Original (GL_LESS, 0.4f);
+
+         glDrawArrays_Original (mode, first, count);
+       }
+       glDepthMask (GL_TRUE);
+
+       if (sprite) {
+         glAlphaFunc_Original (GL_GEQUAL, 0.5f);
+       }
+
+       else {
+         glAlphaFunc_Original (GL_GEQUAL, 0.4f);
+       }
+
+       fringed = true;
+
+       if (pp::RenderFix::tracer.log)
+         dll_log.Log (L"[ GL Trace ] Fringed draw: %X, %d, %d -- GLSL program: %lu", mode, first, count, active_program);
+      }
+    }
+  }
+
+  glDrawArrays_Original (mode, first, count);
+
+  if (fringed)
+    glPopAttrib ();
+}
+
+
 
 
 typedef GLvoid (WINAPI *glMatrixMode_pfn)(GLenum mode);
@@ -201,17 +428,25 @@ glTexImage2D_Detour ( GLenum  target,
 #define GL_RG8               0x8051
 #define GL_RGBA8             0x8058
 
+#if 0
     // Avoid driver weirdness from using a non-color renderable format
     if (internalformat == GL_LUMINANCE_ALPHA) {
       internalformat = GL_RG8;
       format         = GL_RG;
     }
+#endif
 
     if (internalformat == GL_DEPTH_COMPONENT)
       internalformat = GL_DEPTH_COMPONENT24;
 
-    if (internalformat == GL_RGB)
+#if 0
+    // For the sake of memory alignment (the driver is going to do this anyway),
+    //   just pad all RGB stuff out to RGBA (where A is implicitly ignored)
+    if (internalformat == GL_RGB) {
       internalformat = GL_RGBA8;
+      format         = GL_RGBA;
+    }
+#endif
   
 
     if (width == 1280 && height == 720) {
@@ -259,8 +494,10 @@ glRenderbufferStorage_Detour (
   if (internalformat == GL_DEPTH_COMPONENT)
     internalformat = GL_DEPTH_COMPONENT24;
 
+#if 0
   if (internalformat == GL_RGB)
     internalformat = GL_RGBA8;
+#endif
 
 
   if (width == 1280 && height == 720) {
@@ -411,7 +648,7 @@ glCopyTexSubImage2D_Detour (
     {
       glCopyImageSubData = 
         (glCopyImageSubData_pfn)
-          wglGetProcAddress ("glCopyImageSubDataARB");
+          wglGetProcAddress ("glCopyImageSubData");
       if (glCopyImageSubData != nullptr)
         HAS_ARB_COPY_IMAGE = 1;
       else
@@ -616,10 +853,22 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
 
   bool detoured = false;
 
+  if (! strcmp (szFuncName, "glUseProgram") && (ret != nullptr)) {
+    glUseProgram_Original = (glUseProgram_pfn)ret;
+    ret                   = (PROC)glUseProgram_Detour;
+    detoured              = true;
+  }
+
   if (! strcmp (szFuncName, "glShaderSource") && (ret != nullptr)) {
     glShaderSource_Original = (glShaderSource_pfn)ret;
     ret                     = (PROC)glShaderSource_Detour;
     detoured                = true;
+  }
+
+  if (! strcmp (szFuncName, "glCompressedTexImage2D") && (ret != nullptr)) {
+    glCompressedTexImage2D_Original = (glCompressedTexImage2D_pfn)ret;
+    ret                             = (PROC)glCompressedTexImage2D_Detour;
+    detoured                        = true;
   }
 
 #if 0
@@ -694,7 +943,7 @@ GLvoid
 WINAPI
 glFlush_Detour (void)
 {
-  //if (config.compatibility.allow_gl_cpu_sync)
+  if (config.compatibility.allow_gl_cpu_sync)
     glFlush_Original ();
 }
 
@@ -820,6 +1069,8 @@ SwapBuffers_Detour (HDC hdc)
 typedef int (WINAPI *ChoosePixelFormat_pfn)(HDC hdc, const PIXELFORMATDESCRIPTOR *ppfd);
 ChoosePixelFormat_pfn ChoosePixelFormat_Original = nullptr;
 
+LPVOID ChoosePixelFormat_Hook = nullptr;
+
 int
 WINAPI
 ChoosePixelFormat_Detour
@@ -828,43 +1079,35 @@ ChoosePixelFormat_Detour
    const PIXELFORMATDESCRIPTOR *ppfd
 )
 {
-  PIXELFORMATDESCRIPTOR pfd = { 0 };
-
   dll_log.Log (L"[  WinGDI  ] ChoosePixelFormat - Flags: 0x%X", ppfd->dwFlags);
 
-  pfd.nSize          = sizeof pfd;
+  PIXELFORMATDESCRIPTOR pfd =
+  {
+    sizeof (PIXELFORMATDESCRIPTOR),
+    1,
+    PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER | PFD_SWAP_EXCHANGE,
+    PFD_TYPE_RGBA,
+    32,
+    0, 0, 0, 0, 0, 0,
+    0,
+    0,
+    0,
+    0, 0, 0, 0,
+    24,
+    8,
+    0,
+    PFD_MAIN_PLANE,
+    0,
+    0, 0, 0
+  };
 
-  pfd.nVersion       = 1;
-  pfd.dwFlags        = PFD_DOUBLEBUFFER | PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_SWAP_EXCHANGE;
+  PPrinny_DisableHook (ChoosePixelFormat_Hook);
 
-  pfd.iPixelType      = PFD_TYPE_RGBA;
-  pfd.iLayerType      = PFD_MAIN_PLANE;
+  int pf = ChoosePixelFormat_Original (hdc, &pfd);
 
-  pfd.cAccumBits      = 0;
-  pfd.cAccumAlphaBits = 0;
-  pfd.cAccumBlueBits  = 0;
-  pfd.cAccumGreenBits = 0;
-  pfd.cAccumRedBits   = 0;
+  PPrinny_EnableHook (ChoosePixelFormat_Hook);
 
-  pfd.cAlphaBits      = 0;
-  pfd.cAlphaShift     = 0;
-
-  pfd.cRedBits        = 8;
-  pfd.cRedShift       = 0;
-
-  pfd.cBlueBits       = 8;
-  pfd.cBlueShift      = 0;
-
-  pfd.cGreenBits      = 8;
-  pfd.cGreenShift     = 0;
-
-  pfd.cAuxBuffers     = 0;
-
-  pfd.cColorBits      = 24;
-  pfd.cDepthBits      = 24;
-  pfd.cStencilBits    = 8;
-
-  return ChoosePixelFormat_Original (hdc, &pfd);
+  return pf;
 }
 
 
@@ -1008,12 +1251,10 @@ Dummy_WndProc ( HWND   hWnd,
                                OGLEndFrame_Pre,
                      (LPVOID*)&BMF_BeginBufferSwap );
 
-#if 0
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "BMF_EndBufferSwap",
-                               D3D9EndFrame_Post,
+                               OGLEndFrame_Post,
                      (LPVOID*)&BMF_EndBufferSwap );
-#endif
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "glTexImage2D",
@@ -1044,6 +1285,28 @@ Dummy_WndProc ( HWND   hWnd,
                               "glFinish",
                               glFinish_Detour,
                    (LPVOID *)&glFinish_Original );
+
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glTexParameteri",
+                               glTexParameteri_Detour,
+                    (LPVOID *)&glTexParameteri_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glBlendFunc",
+                               glBlendFunc_Detour,
+                    (LPVOID *)&glBlendFunc_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glDrawArrays",
+                               glDrawArrays_Detour,
+                    (LPVOID *)&glDrawArrays_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glAlphaFunc",
+                               glAlphaFunc_Detour,
+                    (LPVOID *)&glAlphaFunc_Original );
+
 
 
       // It sucks to have to hook THESE functions, but there are display lists
@@ -1090,7 +1353,9 @@ Dummy_WndProc ( HWND   hWnd,
       PPrinny_CreateDLLHook ( L"gdi32.dll",
                               "ChoosePixelFormat",
                               ChoosePixelFormat_Detour,
-                   (LPVOID *)&ChoosePixelFormat_Original );
+                   (LPVOID *)&ChoosePixelFormat_Original,
+                   (LPVOID *)&ChoosePixelFormat_Hook );
+      PPrinny_EnableHook    ( ChoosePixelFormat_Hook );
 
 #if 0
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
@@ -1176,8 +1441,10 @@ pp::RenderFix::Init (void)
   // Don't directly modify this state, switching mid-frame would be disasterous...
   pCommandProc->AddVariable ("Render.MSAA",             new eTB_VarStub <bool> (&use_msaa));
 
-  pCommandProc->AddVariable ("Trace.NumFrames",        new eTB_VarStub <int>  (&tracer.count));
-  pCommandProc->AddVariable ("Trace.Enable",           new eTB_VarStub <bool> (&tracer.log));
+  pCommandProc->AddVariable ("Render.FringeRemoval",    new eTB_VarStub <bool> (&config.render.fringe_removal));
+
+  pCommandProc->AddVariable ("Trace.NumFrames",         new eTB_VarStub <int>  (&tracer.count));
+  pCommandProc->AddVariable ("Trace.Enable",            new eTB_VarStub <bool> (&tracer.log));
 
   pCommandProc->AddVariable ("Render.ConservativeMSAA", new eTB_VarStub <bool> (&config.render.conservative_msaa));
   pCommandProc->AddVariable ("Render.EarlyResolve",     new eTB_VarStub <bool> (&early_resolve)); 

@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.0.4";
+std::wstring PPRINNY_VER_STR = L"0.1.0";
 pp_config_s config;
 
 struct {
@@ -36,7 +36,7 @@ struct {
   pp::ParameterInt*     scene_res_x;
   pp::ParameterInt*     scene_res_y;
   pp::ParameterInt*     swap_interval;
-  pp::ParameterBool*    adaptive;
+  pp::ParameterBool*    fringe_removal;
 } render;
 
 struct {
@@ -68,6 +68,8 @@ struct {
   pp::ParameterBool*    block_left_ctrl;
   pp::ParameterBool*    block_windows;
   pp::ParameterBool*    block_all_keys;
+
+  pp::ParameterBool*    wrap_xinput;
 } input;
 
 struct {
@@ -159,6 +161,16 @@ PPrinny_LoadConfig (std::wstring name) {
     dll_ini,
       L"PrettyPrinny.Render",
         L"SwapInterval" );
+
+  render.fringe_removal = 
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Remove Alpha Fringing (depth shenanigans)")
+      );
+  render.fringe_removal->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Render",
+        L"RemoveFringing" );
 
   //render.adaptive =
     //static_cast <pp::ParameterBool *>
@@ -327,6 +339,16 @@ PPrinny_LoadConfig (std::wstring name) {
       L"PrettyPrinny.Input",
         L"BlockAllKeys" );
 
+  input.wrap_xinput = 
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Wrap XInput around MMsystem")
+      );
+  input.wrap_xinput->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Input",
+        L"WrapXInput" );
+
 
   sys.version =
     static_cast <pp::ParameterStringW *>
@@ -372,6 +394,9 @@ PPrinny_LoadConfig (std::wstring name) {
 
   if (render.swap_interval->load ())
     config.render.swap_interval = render.swap_interval->get_value ();
+
+  if (render.fringe_removal->load ())
+    config.render.fringe_removal = render.fringe_removal->get_value ();
 
   //if (render.adaptive->load ())
     //config.render.adaptive = render.adaptive->get_value ();
@@ -422,18 +447,20 @@ PPrinny_LoadConfig (std::wstring name) {
     config.textures.cleanup = textures.cleanup->get_value ();
 #endif
 
-  if (input.block_left_alt->load ())
-    config.input.block_left_alt = input.block_left_alt->get_value ();
+  //if (input.block_left_alt->load ())
+    //config.input.block_left_alt = input.block_left_alt->get_value ();
 
-  if (input.block_left_ctrl->load ())
-    config.input.block_left_ctrl = input.block_left_ctrl->get_value ();
+  //if (input.block_left_ctrl->load ())
+    //config.input.block_left_ctrl = input.block_left_ctrl->get_value ();
 
-  if (input.block_windows->load ())
-    config.input.block_windows = input.block_windows->get_value ();
+  //if (input.block_windows->load ())
+    //config.input.block_windows = input.block_windows->get_value ();
 
-  if (input.block_all_keys->load ())
-    config.input.block_all_keys = input.block_all_keys->get_value ();
+  //if (input.block_all_keys->load ())
+    //config.input.block_all_keys = input.block_all_keys->get_value ();
 
+  if (input.wrap_xinput->load ())
+    config.input.wrap_xinput = input.wrap_xinput->get_value ();
 
   if (sys.version->load ())
     config.system.version = sys.version->get_value ();
@@ -471,6 +498,9 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
 
   render.swap_interval->set_value      (config.render.swap_interval);
   render.swap_interval->store          ();
+
+  render.fringe_removal->set_value     (config.render.fringe_removal);
+  render.fringe_removal->store         ();
 
   //render.adaptive->set_value          (config.render.adaptive);
   //render.adaptive->store              ();
@@ -525,18 +555,20 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
 //  textures.log->store                ();
 
 
-  input.block_left_alt->set_value  (config.input.block_left_alt);
-  input.block_left_alt->store      ();
+  //input.block_left_alt->set_value  (config.input.block_left_alt);
+  //input.block_left_alt->store      ();
 
-  input.block_left_ctrl->set_value (config.input.block_left_ctrl);
-  input.block_left_ctrl->store     ();
+  //input.block_left_ctrl->set_value (config.input.block_left_ctrl);
+  //input.block_left_ctrl->store     ();
 
-  input.block_windows->set_value   (config.input.block_windows);
-  input.block_windows->store       ();
+  //input.block_windows->set_value   (config.input.block_windows);
+  //input.block_windows->store       ();
 
-  input.block_all_keys->set_value  (config.input.block_all_keys);
-  input.block_all_keys->store      ();
+  //input.block_all_keys->set_value  (config.input.block_all_keys);
+  //input.block_all_keys->store      ();
 
+  input.wrap_xinput->set_value      (config.input.wrap_xinput);
+  input.wrap_xinput->store          ();
 
   sys.version->set_value  (PPRINNY_VER_STR);
   sys.version->store      ();

@@ -419,6 +419,268 @@ DirectInput8Create_Detour ( HINSTANCE  hinst,
 }
 
 
+
+
+
+typedef struct _XINPUT_GAMEPAD {
+  WORD  wButtons;
+  BYTE  bLeftTrigger;
+  BYTE  bRightTrigger;
+  SHORT sThumbLX;
+  SHORT sThumbLY;
+  SHORT sThumbRX;
+  SHORT sThumbRY;
+} XINPUT_GAMEPAD, *PXINPUT_GAMEPAD;
+
+typedef struct _XINPUT_STATE {
+  DWORD          dwPacketNumber;
+  XINPUT_GAMEPAD Gamepad;
+} XINPUT_STATE, *PXINPUT_STATE;
+
+typedef DWORD (WINAPI *XInputGetState_pfn)(
+  _In_  DWORD        dwUserIndex,
+  _Out_ XINPUT_STATE *pState
+);
+
+XInputGetState_pfn XInputGetState = nullptr;
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// WinMM Input APIs
+//
+///////////////////////////////////////////////////////////////////////////////
+
+typedef MMRESULT (WINAPI *joyGetDevCapsA_pfn)(
+   UINT_PTR   uJoyID,
+   LPJOYCAPSA pjc,
+   UINT       cbjc
+);
+
+typedef UINT (WINAPI *joyGetNumDevs_pfn)(
+  void
+);
+
+typedef MMRESULT (WINAPI *joyGetPos_pfn) (
+   UINT      uJoyID,
+   LPJOYINFO pji
+);
+
+typedef MMRESULT (WINAPI *joyGetPosEx_pfn)(
+   UINT        uJoyID,
+   LPJOYINFOEX pji
+);
+
+joyGetDevCapsA_pfn joyGetDevCapsA_Original = nullptr;
+joyGetNumDevs_pfn  joyGetNumDevs_Original  = nullptr;
+joyGetPos_pfn      joyGetPos_Original      = nullptr;
+joyGetPosEx_pfn    joyGetPosEx_Original    = nullptr;
+
+#define XINPUT_GAMEPAD_DPAD_UP          0x0001
+#define XINPUT_GAMEPAD_DPAD_DOWN        0x0002
+#define XINPUT_GAMEPAD_DPAD_LEFT        0x0004
+#define XINPUT_GAMEPAD_DPAD_RIGHT       0x0008
+#define XINPUT_GAMEPAD_START            0x0010
+#define XINPUT_GAMEPAD_BACK             0x0020
+#define XINPUT_GAMEPAD_LEFT_THUMB       0x0040
+#define XINPUT_GAMEPAD_RIGHT_THUMB      0x0080
+#define XINPUT_GAMEPAD_LEFT_SHOULDER    0x0100
+#define XINPUT_GAMEPAD_RIGHT_SHOULDER   0x0200
+#define XINPUT_GAMEPAD_A                0x1000
+#define XINPUT_GAMEPAD_B                0x2000
+#define XINPUT_GAMEPAD_X                0x4000
+#define XINPUT_GAMEPAD_Y                0x8000
+
+__declspec (noinline)
+MMRESULT
+WINAPI
+joyGetDevCapsA_Detour (UINT_PTR uJoyID, LPJOYCAPSA pjc, UINT cbjc)
+{
+////  dll_log.Log (L"joyGetDevCapsA");
+
+  XINPUT_STATE xstate;
+  DWORD dwRet = XInputGetState (uJoyID, &xstate);
+
+  if (dwRet == ERROR_DEVICE_NOT_CONNECTED)
+    return MMSYSERR_NODRIVER;
+
+  int num_buttons = 0;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP)    ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN)  ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT)  ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) ++num_buttons;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_START)      ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_BACK)       ++num_buttons;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB)  ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) ++num_buttons;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER)  ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) ++num_buttons;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_A) ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_B) ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_X) ++num_buttons;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_Y) ++num_buttons;
+
+  pjc->wMaxButtons = 14;
+  pjc->wNumButtons = num_buttons;
+
+  pjc->wMaxAxes = 6; // 6 if you want the left/right trigger
+  pjc->wNumAxes = 4;
+
+  pjc->wCaps = JOYCAPS_HASZ | JOYCAPS_HASR;
+
+  // For Left/Right Triggers
+  //pjc->wCaps |= JOYCAPS_HAS_U | JOYCAPS_HASV;
+
+  pjc->wMid = 0x666;
+  pjc->wPid = 0x666;
+
+  strcpy (pjc->szPname,  "Pretty Prinny XInput Wrapper");
+  strcpy (pjc->szRegKey, "");
+  strcpy (pjc->szOEMVxD, "");
+
+  // Left Thumb
+  pjc->wXmin =  0;//-32768;
+  pjc->wXmax =  32768+32767;
+
+  pjc->wYmin =  0;//-32768;
+  pjc->wYmax =  32768+32767;
+
+  // Right Thumb
+  pjc->wZmin = 0;//-32768;
+  pjc->wZmax = 0;// 32767;
+
+  pjc->wRmin = 0;//-32768;
+  pjc->wRmax = 0;// 32767;
+
+  // Left Trigger
+  pjc->wUmin =  0;//0;
+  pjc->wUmax =  0;//255;
+
+  // Right Trigger
+  pjc->wVmin =  0;//0;
+  pjc->wVmax =  0;//255;
+
+  // DON'T CARE, BUT WHATEVER
+  pjc->wPeriodMin = 1;
+  pjc->wPeriodMax = UINT_MAX;
+
+  return JOYERR_NOERROR; 
+
+  //return joyGetDevCapsA_Original (uJoyID, pjc, cbjc);
+}
+
+__declspec (noinline)
+UINT
+WINAPI
+joyGetNumDevs_Detour (void)
+{
+////  dll_log.Log (L"joyGetNumDevs");
+
+  return 4;
+
+  //return joyGetNumDevs_Original ();
+}
+
+__declspec (noinline)
+MMRESULT
+WINAPI
+joyGetPos_Detour (UINT uJoyID, LPJOYINFO pji)
+{
+  //dll_log.Log (L"joyGetPos");
+
+  XINPUT_STATE xstate;
+  DWORD dwRet = XInputGetState (uJoyID, &xstate);
+
+  if (dwRet == ERROR_DEVICE_NOT_CONNECTED)
+    return JOYERR_UNPLUGGED;
+
+  pji->wXpos = 32768 + xstate.Gamepad.sThumbLX;
+  pji->wYpos = 32768 + xstate.Gamepad.sThumbLY;
+  pji->wZpos = 0;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_A) pji->wButtons |= JOY_BUTTON1;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_B) pji->wButtons |= JOY_BUTTON2;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_X) pji->wButtons |= JOY_BUTTON3;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_Y) pji->wButtons |= JOY_BUTTON4;
+
+  return JOYERR_NOERROR;
+
+  return joyGetPos_Original (uJoyID, pji);
+}
+
+__declspec (noinline)
+MMRESULT
+WINAPI
+joyGetPosEx_Detour (UINT uJoyID, LPJOYINFOEX pji)
+{
+  //dll_log.Log (L"joyGetPosEx");
+  //return MMSYSERR_NODRIVER;
+
+  XINPUT_STATE xstate;
+  DWORD dwRet = XInputGetState (uJoyID, &xstate);
+
+  if (dwRet == ERROR_DEVICE_NOT_CONNECTED)
+    return JOYERR_UNPLUGGED;
+
+  pji->dwXpos = 32768 + xstate.Gamepad.sThumbLX;
+  pji->dwYpos = 32768 + xstate.Gamepad.sThumbLY;
+
+  pji->dwZpos = 0;//xstate.Gamepad.sThumbRX;
+  pji->dwRpos = 0;// xstate.Gamepad.sThumbRY;
+
+  pji->dwUpos = 0;//xstate.Gamepad.bLeftTrigger;
+  pji->dwVpos = 0;//xstate.Gamepad.bRightTrigger;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_A) pji->dwButtons |= JOY_BUTTON1;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_B) pji->dwButtons |= JOY_BUTTON2;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_X) pji->dwButtons |= JOY_BUTTON3;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_Y) pji->dwButtons |= JOY_BUTTON4;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_START) pji->dwButtons |= JOY_BUTTON5;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_BACK)  pji->dwButtons |= JOY_BUTTON6;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_THUMB)  pji->dwButtons |= JOY_BUTTON7;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) pji->dwButtons |= JOY_BUTTON8;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER)  pji->dwButtons |= JOY_BUTTON9;
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) pji->dwButtons |= JOY_BUTTON10;
+
+  pji->dwPOV = 0;
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) {
+    pji->dwPOV     |= JOY_POVFORWARD;
+    pji->dwButtons |= JOY_BUTTON11;
+  }
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) {
+    pji->dwPOV     |= JOY_POVBACKWARD;
+    pji->dwButtons |= JOY_BUTTON12;
+  }
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) {
+    pji->dwPOV     |= JOY_POVLEFT;
+    pji->dwButtons |= JOY_BUTTON13;
+  }
+
+  if (xstate.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) {
+    pji->dwPOV     |= JOY_POVRIGHT;
+    pji->dwButtons |= JOY_BUTTON14;
+  }
+
+  if (pji->dwPOV == 0)
+    pji->dwPOV = JOY_POVCENTERED;
+
+  pji->dwFlags = pji->dwPOV == JOY_POVCENTERED ? JOY_RETURNCENTERED : JOY_RETURNPOV | JOY_RETURNX | JOY_RETURNY | JOY_RETURNBUTTONS;
+
+  return JOYERR_NOERROR;
+
+  //return joyGetPosEx_Original (uJoyID, pji);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 // User32 Input APIs
@@ -451,6 +713,8 @@ GetCursorPos_pfn     GetCursorPos_Original     = nullptr;
 SetCursorPos_pfn     SetCursorPos_Original     = nullptr;
 
 ClipCursor_pfn       ClipCursor_Original       = nullptr;
+
+
 
 UINT
 WINAPI
@@ -655,6 +919,34 @@ pp::InputManager::Init (void)
                           SetPhysicalCursorPos_Detour,
                 (LPVOID*)&SetPhysicalCursorPos_Original );
 #endif
+
+
+  if (config.input.wrap_xinput) {
+    HMODULE hModXInput13 = LoadLibraryW (L"XInput1_3.dll");
+
+    XInputGetState =
+      (XInputGetState_pfn)
+        GetProcAddress (hModXInput13, "XInputGetState");
+
+    //
+    // MMSystem Input Hooks
+    //
+    PPrinny_CreateDLLHook ( L"winmm.dll", "joyGetDevCapsA",
+                            joyGetDevCapsA_Detour,
+                  (LPVOID*)&joyGetDevCapsA_Original );
+
+    PPrinny_CreateDLLHook ( L"winmm.dll", "joyGetNumDevs",
+                            joyGetNumDevs_Detour,
+                  (LPVOID*)&joyGetNumDevs_Original );
+
+    PPrinny_CreateDLLHook ( L"winmm.dll", "joyGetPos",
+                            joyGetPos_Detour,
+                  (LPVOID*)&joyGetPos_Original );
+
+    PPrinny_CreateDLLHook ( L"winmm.dll", "joyGetPosEx",
+                            joyGetPosEx_Detour,
+                  (LPVOID*)&joyGetPosEx_Original );
+  }
 
   pp::InputManager::Hooker* pHook =
     pp::InputManager::Hooker::getInstance ();
@@ -990,6 +1282,10 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
 
         else if (vkCode == '3' && new_press) {
           pCommandProc->ProcessCommandLine ("Window.ForegroundFPS 0.0");
+        }
+
+        else if (vkCode == VK_OEM_PERIOD && new_press) {
+          pCommandProc->ProcessCommandLine ("Render.FringeRemoval toggle");
         }
       }
 

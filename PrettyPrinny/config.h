@@ -39,12 +39,13 @@ struct pp_config_s
 
     int      swap_interval       = 1;
 
+    bool     fringe_removal      = true;
     bool     conservative_msaa   = true;
   } render;
 
   struct {
     bool     bypass_intel_gl     = true;
-    bool     allow_gl_cpu_sync   = true;
+    bool     allow_gl_cpu_sync   = false;
     bool     debug_mode          = false;
     bool     support_old_drivers = false;
   } compatibility;
@@ -76,6 +77,7 @@ struct pp_config_s
   } trace;
 
   struct {
+    bool wrap_xinput    = true;
     bool block_left_alt  = false;
     bool block_left_ctrl = false;
     bool block_windows   = false;
