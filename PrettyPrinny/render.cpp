@@ -45,6 +45,34 @@ bool drawing_main_scene = false;
 #include <gl/GL.h>
 #pragma comment (lib, "OpenGL32.lib")
 
+extern void
+PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
+                                 GLint    level,
+                                 GLenum   format,
+                                 GLsizei  width,
+                                 GLsizei  height,
+
+                                 GLsizei  imageSize,
+                           const GLvoid*  data );
+
+
+extern void
+PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
+                                   GLint    level,
+                                   GLenum   format,
+                                   GLsizei  width,
+                                   GLsizei  height,
+
+                                   GLsizei  imageSize,
+                             const GLvoid*  data );
+
+// These are textures that should always be clamped to edge for proper
+//   smoothing behavior
+#include <set>
+std::set <GLuint> ui_textures;
+
+
+
 GLuint active_program = 0;
 
 GLuint csprite_program = 0; // Character
@@ -211,6 +239,8 @@ typedef GLvoid (WINAPI *glTexParameteri_pfn)(
   GLint  param
 );
 
+bool ui_clamp = true;
+
 glTexParameteri_pfn glTexParameteri_Original = nullptr;
 
 __declspec (noinline)
@@ -222,16 +252,16 @@ glTexParameteri_Detour (
   GLint  param
 )
 {
-#if 0
-  if ( pname == GL_TEXTURE_WRAP_S ||
-       pname == GL_TEXTURE_WRAP_T ) {
-    if (param != GL_REPEAT) {
+  //
+  // Clamp all UI textures (to edge)
+  //
+  if ( ui_clamp && (pname == GL_TEXTURE_WRAP_S ||
+                    pname == GL_TEXTURE_WRAP_T) ) {
+    if (ui_textures.find (texture) != ui_textures.end ()) {
 #define GL_CLAMP_TO_EDGE 0x812F 
       param = GL_CLAMP_TO_EDGE;
-      //dll_log.Log (L"Replaced Clamp with Clamp To Edge");
-    //}
+    }
   }
-#endif
 
   return glTexParameteri_Original (texture, pname, param);
 }
@@ -263,6 +293,10 @@ glCompressedTexImage2D_Detour (
         GLsizei imageSize, 
   const GLvoid* data )
 {
+  if (config.textures.dump) {
+    PPrinny_DumpCompressedTexLevel (crc32 (0, data, imageSize), level, internalFormat, width, height, imageSize, data);
+  }
+
 #if 0
   dll_log.Log ( L"[GL Texture] Loaded Compressed Texture: Level=%li, (%lix%li) {%5.2f KiB}",
                   level, width, height, (float)imageSize / 1024.0f );
@@ -412,16 +446,82 @@ glTexImage2D_Detour ( GLenum  target,
                       GLenum  type,
                 const GLvoid* data )
 {
+  if (data != nullptr && internalformat == GL_RGBA) {
+    const int imageSize = width * height * 4;
+    uint32_t  checksum  = crc32 (0, data, imageSize);
+
+    if (config.textures.dump) {
+      //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
+
+      PPrinny_DumpUncompressedTexLevel (
+        checksum,
+          level,
+            format,
+              width, height,
+                imageSize,
+                  data );
+    }
+
+    //
+    // Gamepad Button Texture
+    // 
+    if (checksum == 0x7BE1DE43) {
+      int      size, width, height;
+      int      bpp;
+      uint8_t  type_ [4];
+      uint8_t  info_ [7];
+      uint8_t* tex;
+
+      FILE* fTGA;
+
+      if ((fTGA = fopen ("pad.tga", "rb")) != nullptr) {
+        fread (&type_, 1, 3, fTGA);
+        fseek (fTGA,   12,   SEEK_SET);
+        fread (&info_, 1, 6, fTGA);
+
+        if(! (type_[1] != 0 || (type_[2] != 2 && type_[2] != 3))) {
+          width  = info_ [0] + info_ [1] * 256;
+          height = info_ [2] + info_ [3] * 256;
+          bpp    = info_ [4];
+
+          size = width * height * (bpp >> 3);
+
+          tex =
+            (uint8_t*) malloc (size);
+
+          fread  (tex, size, 1, fTGA);
+          fclose (fTGA);
+
+          glTexImage2D_Original ( target,
+                                    level,
+                                      internalformat,
+                                        width, height,
+                                          border,
+                                            format,
+                                              type,
+                                                tex );
+
+          free (tex);
+          return;
+        }
+      }
+    }
+  }
+
   GLint texId;
   glGetIntegerv (GL_TEXTURE_BINDING_2D, &texId);
 
   if (data == nullptr) {
+    ui_textures.insert (texId);
+
     dll_log.Log ( L"[GL Texture] Id=%i, LOD: %i, (%ix%i)",
                     texId, level, width, height );
 
     //dll_log.Log ( L"[GL Texture]  >> Possible Render Target");
 
-    dll_log.Log (L"[GL Texture]  >> Render Target - Internal Format: 0x%X <<", internalformat);
+    dll_log.Log ( L"[GL Texture]  >> Render Target - "
+                  L"Internal Format: 0x%X <<",
+                    internalformat );
 
 #define GL_DEPTH_COMPONENT24 0x81A6
 #define GL_RG                0x8227
@@ -1180,72 +1280,8 @@ wglCreateContext_Detour (HDC hDC)
 LRESULT CALLBACK Dummy_WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
 void
-PP_InitGL (void)
+PP_InitGLHooks (void)
 {
-  HINSTANCE hInstance = GetModuleHandle (NULL);
-
-  MSG msg          = { 0 };
-  WNDCLASS wc      = { 0 }; 
-  wc.lpfnWndProc   = Dummy_WndProc;
-  wc.hInstance     = hInstance;
-  wc.hbrBackground = (HBRUSH)(COLOR_BACKGROUND);
-  wc.lpszClassName = L"Dumy_Pretty_Prinny";
-  wc.style         = CS_OWNDC;
-
-  if (! RegisterClass (&wc))
-    return;
-
-  CreateWindowW ( wc.lpszClassName,
-                    L"Dummy_Pretty_Prinny",
-                      WS_OVERLAPPEDWINDOW/* | WS_VISIBLE*/,
-                        0,0,
-                          0,0,
-                            0,0,
-                              hInstance,0);
-
-  if (PeekMessage (&msg, NULL, 0, 0, 1) > 0)
-    DispatchMessage (&msg);
-}
-
-LRESULT
-CALLBACK
-Dummy_WndProc ( HWND   hWnd,
-                UINT   message,
-                WPARAM wParam,
-                LPARAM lParam )
-{
-  switch (message)
-  {
-    case WM_CREATE:
-    {
-      PIXELFORMATDESCRIPTOR pfd =
-      {
-        sizeof (PIXELFORMATDESCRIPTOR),
-        1,
-        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
-        PFD_TYPE_RGBA,
-        32,
-        0, 0, 0, 0, 0, 0,
-        0,
-        0,
-        0,
-        0, 0, 0, 0,
-        24,
-        8,
-        0,
-        PFD_MAIN_PLANE,
-        0,
-        0, 0, 0
-      };
-
-      HDC dummy_dc     = GetDC             (hWnd);
-      int dummy_pf_idx = ChoosePixelFormat (dummy_dc, &pfd); 
-
-      SetPixelFormat (dummy_dc, dummy_pf_idx, &pfd);
-
-      HGLRC dummy_ctx = wglCreateContext (dummy_dc);
-                        wglMakeCurrent   (dummy_dc, dummy_ctx);
-
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "BMF_BeginBufferSwap",
                                OGLEndFrame_Pre,
@@ -1380,6 +1416,77 @@ Dummy_WndProc ( HWND   hWnd,
                               "wglGetProcAddress",
                               wglGetProcAddress_Detour,
                    (LPVOID *)&wglGetProcAddress_Original );
+
+}
+
+void
+PP_InitGL (void)
+{
+  HINSTANCE hInstance = GetModuleHandle (NULL);
+
+  MSG msg          = { 0 };
+  WNDCLASS wc      = { 0 }; 
+  wc.lpfnWndProc   = Dummy_WndProc;
+  wc.hInstance     = hInstance;
+  wc.hbrBackground = (HBRUSH)(COLOR_BACKGROUND);
+  wc.lpszClassName = L"Dumy_Pretty_Prinny";
+  wc.style         = CS_OWNDC;
+
+  if (config.compatibility.support_old_drivers || (! RegisterClass (&wc))) {
+    dll_log.Log (L"[OGL Driver] Opting out of OpenGL 3.2+ Profile");
+    PP_InitGLHooks ();
+    return;
+  }
+
+  CreateWindowW ( wc.lpszClassName,
+                    L"Dummy_Pretty_Prinny",
+                      WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                        0,0,
+                          0,0,
+                            0,0,
+                              hInstance,0);
+}
+
+LRESULT
+CALLBACK
+Dummy_WndProc ( HWND   hWnd,
+                UINT   message,
+                WPARAM wParam,
+                LPARAM lParam )
+{
+  switch (message)
+  {
+    case WM_CREATE:
+    {
+      PIXELFORMATDESCRIPTOR pfd =
+      {
+        sizeof (PIXELFORMATDESCRIPTOR),
+        1,
+        PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+        PFD_TYPE_RGBA,
+        32,
+        0, 0, 0, 0, 0, 0,
+        0,
+        0,
+        0,
+        0, 0, 0, 0,
+        24,
+        8,
+        0,
+        PFD_MAIN_PLANE,
+        0,
+        0, 0, 0
+      };
+
+      HDC dummy_dc     = GetDC             (hWnd);
+      int dummy_pf_idx = ChoosePixelFormat (dummy_dc, &pfd); 
+
+      SetPixelFormat (dummy_dc, dummy_pf_idx, &pfd);
+
+      HGLRC dummy_ctx = wglCreateContext (dummy_dc);
+                        wglMakeCurrent   (dummy_dc, dummy_ctx);
+
+      PP_InitGLHooks ();
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "wglCreateContext",

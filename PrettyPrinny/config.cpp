@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.1.0";
+std::wstring PPRINNY_VER_STR = L"0.1.1";
 pp_config_s config;
 
 struct {
@@ -60,6 +60,7 @@ struct {
 } stutter;
 
 struct {
+  pp::ParameterBool*    dump;
   //pp::ParameterInt*     max_anisotropy;
 } textures;
 
@@ -299,6 +300,18 @@ PPrinny_LoadConfig (std::wstring name) {
 
 
 
+  textures.dump =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Dump Textures")
+      );
+  textures.dump->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Textures",
+        L"Dump" );
+
+
+
   input.block_left_alt =
     static_cast <pp::ParameterBool *>
       (g_ParameterFactory.create_parameter <bool> (
@@ -410,6 +423,10 @@ PPrinny_LoadConfig (std::wstring name) {
 
   if (compatibility.debug_mode->load ())
     config.compatibility.debug_mode = compatibility.debug_mode->get_value ();
+
+
+  if (textures.dump->load ())
+    config.textures.dump = textures.dump->get_value ();
 
 
 
@@ -548,8 +565,8 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   //textures.max_anisotropy->set_value (config.textures.max_anisotropy);
   //textures.max_anisotropy->store     ();
 
-//  textures.dump->set_value           (config.textures.dump);
-//  textures.dump->store               ();
+  textures.dump->set_value           (config.textures.dump);
+  textures.dump->store               ();
 
 //  textures.log->set_value            (config.textures.log);
 //  textures.log->store                ();

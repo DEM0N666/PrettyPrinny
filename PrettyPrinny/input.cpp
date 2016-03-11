@@ -1272,6 +1272,11 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
           pCommandProc->ProcessCommandLine ("Render.MSAA toggle");
         }
 
+        else if (vkCode == 'U' && new_press) {
+          extern bool ui_clamp;
+          ui_clamp = (! ui_clamp);
+        }
+
         else if (vkCode == '1' && new_press) {
           pCommandProc->ProcessCommandLine ("Window.ForegroundFPS 60.0");
         }
