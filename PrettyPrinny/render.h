@@ -44,6 +44,7 @@ namespace pp
 
       int          draws          = 0; // Number of draw calls
       int          frames         = 0;
+      DWORD        thread         = 0;
     } extern draw_state;
 
 

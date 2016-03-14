@@ -45,6 +45,10 @@ bool drawing_main_scene = false;
 #include <gl/GL.h>
 #pragma comment (lib, "OpenGL32.lib")
 
+typedef PROC (APIENTRY *wglGetProcAddress_pfn)(LPCSTR);
+wglGetProcAddress_pfn wglGetProcAddress_Original = nullptr;
+
+
 extern void
 PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
                                  GLint    level,
@@ -75,10 +79,6 @@ std::set <GLuint> ui_textures;
 
 GLuint active_program = 0;
 
-GLuint csprite_program = 0; // Character
-GLuint wsprite_program = 0; // World
-
-
 BMF_BeginBufferSwap_pfn BMF_BeginBufferSwap = nullptr;
 
 COM_DECLSPEC_NOTHROW
@@ -89,8 +89,6 @@ OGLEndFrame_Pre (void)
   //pp::RenderFix::dwRenderThreadID = GetCurrentThreadId ();
 
   active_program  = 0;
-  csprite_program = 0;
-  wsprite_program = 0;
 
   void PPrinny_DrawCommandConsole (void);
   PPrinny_DrawCommandConsole ();
@@ -109,6 +107,9 @@ OGLEndFrame_Post (HRESULT hr, IUnknown* pDev)
     if (--pp::RenderFix::tracer.count == 0)
       pp::RenderFix::tracer.log = false;
   }
+
+  pp::RenderFix::draw_state.frames++;
+  pp::RenderFix::draw_state.thread = GetCurrentThreadId ();
 
   return BMF_EndBufferSwap (S_OK, nullptr);
 }
@@ -234,7 +235,7 @@ glDisable_Detour (GLenum cap)
 
 
 typedef GLvoid (WINAPI *glTexParameteri_pfn)(
-  GLuint texture,
+  GLenum target,
   GLenum pname,
   GLint  param
 );
@@ -247,23 +248,31 @@ __declspec (noinline)
 GLvoid
 WINAPI
 glTexParameteri_Detour (
-  GLuint texture,
+  GLenum target,
   GLenum pname,
   GLint  param
 )
 {
+#if 0
+  GLint texture = 0;
+
+  if (target == GL_TEXTURE_2D) {
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texture);
+  }
+
   //
   // Clamp all UI textures (to edge)
   //
   if ( ui_clamp && (pname == GL_TEXTURE_WRAP_S ||
                     pname == GL_TEXTURE_WRAP_T) ) {
-    if (ui_textures.find (texture) != ui_textures.end ()) {
+    if (texture != 0 && ui_textures.find (texture) != ui_textures.end ()) {
 #define GL_CLAMP_TO_EDGE 0x812F 
       param = GL_CLAMP_TO_EDGE;
     }
   }
+#endif
 
-  return glTexParameteri_Original (texture, pname, param);
+  return glTexParameteri_Original (target, pname, param);
 }
 
 
@@ -293,14 +302,47 @@ glCompressedTexImage2D_Detour (
         GLsizei imageSize, 
   const GLvoid* data )
 {
+  uint32_t checksum = crc32 (0, data, imageSize);
+
   if (config.textures.dump) {
-    PPrinny_DumpCompressedTexLevel (crc32 (0, data, imageSize), level, internalFormat, width, height, imageSize, data);
+    PPrinny_DumpCompressedTexLevel (checksum, level, internalFormat, width, height, imageSize, data);
   }
 
 #if 0
   dll_log.Log ( L"[GL Texture] Loaded Compressed Texture: Level=%li, (%lix%li) {%5.2f KiB}",
                   level, width, height, (float)imageSize / 1024.0f );
 #endif
+
+  // These should be clamped to edge, the game does not repeat these and annoying artifacts are visible
+  //   if we don't do this
+  if (checksum == 0xD474EABE ||
+      checksum == 0xD5B07A99 ||
+
+/*
+      checksum == 0xFD954B60 ||
+      checksum == 0x868F2CB9 ||
+
+      checksum == 0x81C1715B ||
+      checksum == 0xE6DC24D6 ||
+
+      checksum == 0xC549C9DF ||
+      checksum == 0x18DC669  ||
+*/
+
+      checksum == 0xB4F15F92 ||
+      checksum == 0x93C585F7 ||
+
+      checksum == 0x6B1AC7B5 ||
+      checksum == 0x595868F0 ||
+
+      checksum == 0x79B6E066 ||
+      checksum == 0xACE9C61  ||
+
+      (width == 1024 && height == 1024)) {
+    GLint texid;
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texid);
+    ui_textures.insert (texid);
+  }
 
   return glCompressedTexImage2D_Original (
     target, level,
@@ -310,6 +352,29 @@ glCompressedTexImage2D_Detour (
             imageSize, data );
 }
 
+
+
+typedef GLvoid (WINAPI *glBindFramebuffer_pfn)(GLenum target, GLuint framebuffer);
+glBindFramebuffer_pfn glBindFramebuffer_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glBindFramebuffer_Detour (GLenum target, GLuint framebuffer)
+{
+#define GL_READ_FRAMEBUFFER               0x8CA8
+#define GL_DRAW_FRAMEBUFFER               0x8CA9
+#define GL_FRAMEBUFFER                    0x8D40
+
+  //dll_log.Log ( L"[GL CallLog] glBindFramebuffer (0x%X, %lu)",
+                  //target, framebuffer );
+
+  glBindFramebuffer_Original (target, framebuffer);
+}
+
+
+typedef GLvoid (WINAPI *glColorMaski_pfn)(GLuint buf, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+glColorMaski_pfn glColorMaski = nullptr;
 
 typedef GLvoid (WINAPI *glDrawArrays_pfn)(GLenum mode, GLint first, GLsizei count);
 glDrawArrays_pfn glDrawArrays_Original = nullptr;
@@ -329,35 +394,54 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
     bool world  = (mode == GL_TRIANGLES && count < 180);//      && count == 6);
     bool sprite = (mode == GL_TRIANGLE_STRIP && count == 4);
 
-     GLboolean depth_mask;
-     glGetBooleanv (GL_DEPTH_WRITEMASK, &depth_mask);
+     if (drawing_main_scene && (world || sprite)) {
+       GLboolean depth_mask, depth_test;
+       glGetBooleanv (GL_DEPTH_WRITEMASK, &depth_mask);
+       glGetBooleanv (GL_DEPTH_TEST,      &depth_test);
 
-    if (drawing_main_scene && depth_mask && texture_2d && ( world || sprite )) {
-      GLint filter;
-      glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &filter);
+       if (depth_mask && depth_test && texture_2d) {
 
-      if (filter == GL_LINEAR) {
+       GLint filter;
+       glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &filter);
+
+       if (filter == GL_LINEAR) {
        glPushAttrib (GL_COLOR_BUFFER_BIT);
 
-       glDepthMask (GL_FALSE);
+       if (glColorMaski == nullptr)
+         glColorMaski = (glColorMaski_pfn)wglGetProcAddress_Original ("glColorMaski");
+
+       glDepthMask   (GL_FALSE);
+
+       //
+       // SSAO Hacks
+       //
+       glColorMaski (1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+       glColorMaski (2, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+       glColorMaski (3, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
        {
          glEnable_Original (GL_ALPHA_TEST);
 
          if (sprite)
-           glAlphaFunc_Original (GL_LESS, 0.5f);
+           glAlphaFunc_Original (GL_LESS, 0.425f);
          else
-           glAlphaFunc_Original (GL_LESS, 0.4f);
+           glAlphaFunc_Original (GL_LESS, 0.35f);
 
          glDrawArrays_Original (mode, first, count);
        }
+
+       glColorMaski (3, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+       glColorMaski (2, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+       glColorMaski (1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
        glDepthMask (GL_TRUE);
 
        if (sprite) {
-         glAlphaFunc_Original (GL_GEQUAL, 0.5f);
+         glAlphaFunc_Original (GL_GEQUAL, 0.425f);
        }
 
        else {
-         glAlphaFunc_Original (GL_GEQUAL, 0.4f);
+         glAlphaFunc_Original (GL_GEQUAL, 0.35f);
        }
 
        fringed = true;
@@ -366,12 +450,14 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
          dll_log.Log (L"[ GL Trace ] Fringed draw: %X, %d, %d -- GLSL program: %lu", mode, first, count, active_program);
       }
     }
+    }
   }
 
   glDrawArrays_Original (mode, first, count);
 
-  if (fringed)
+  if (fringed) {
     glPopAttrib ();
+  }
 }
 
 
@@ -418,6 +504,64 @@ glGetFloatv_Detour (GLenum pname, GLfloat* pparams)
 
 
 
+typedef GLvoid (WINAPI *glDeleteTextures_pfn)(
+  GLsizei n,
+  GLuint* textures
+);
+
+glDeleteTextures_pfn glDeleteTextures_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glDeleteTextures_Detour (GLsizei n, GLuint* textures)
+{
+  for (int i = 0; i < n; i++) {
+    if (ui_textures.find (textures [i]) != ui_textures.end ()) {
+      //dll_log.Log (L"Deleted UI texture");
+      ui_textures.erase (textures [i]);
+    }
+  }
+
+  glDeleteTextures_Original (n, textures);
+}
+
+typedef GLvoid (WINAPI *glTexSubImage2D_pfn)(
+        GLenum   target,
+        GLint    level,
+        GLint    xoffset,
+        GLint    yoffset,
+        GLsizei  width,
+        GLsizei  height,
+        GLenum   format,
+        GLenum   type,
+  const GLvoid  *pixels
+);
+
+glTexSubImage2D_pfn glTexSubImage2D_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glTexSubImage2D_Detour ( GLenum  target,
+                         GLint   level,
+                         GLint   xoffset,
+                         GLint   yoffset,
+                         GLsizei width,
+                         GLsizei height,
+                         GLenum  format,
+                         GLenum  type,
+                   const GLvoid* pixels )
+{
+  dll_log.Log (L"[ Tex Dump ] SubImage2D - Level: %li, <%li,%li>", level, xoffset, yoffset);
+
+  glTexSubImage2D_Original (
+    target, level,
+      xoffset, yoffset,
+        width, height,
+          format, type,
+            pixels );
+}
 
 typedef GLvoid (WINAPI *glTexImage2D_pfn)(
          GLenum  target,
@@ -446,7 +590,8 @@ glTexImage2D_Detour ( GLenum  target,
                       GLenum  type,
                 const GLvoid* data )
 {
-  if (data != nullptr && internalformat == GL_RGBA) {
+  if (data != nullptr) {
+  if (internalformat == GL_RGBA) {
     const int imageSize = width * height * 4;
     uint32_t  checksum  = crc32 (0, data, imageSize);
 
@@ -492,6 +637,10 @@ glTexImage2D_Detour ( GLenum  target,
           fread  (tex, size, 1, fTGA);
           fclose (fTGA);
 
+          GLint texId;
+          glGetIntegerv (GL_TEXTURE_BINDING_2D, &texId);
+          ui_textures.insert (texId);
+
           glTexImage2D_Original ( target,
                                     level,
                                       internalformat,
@@ -508,11 +657,42 @@ glTexImage2D_Detour ( GLenum  target,
     }
   }
 
+  if (format == GL_COLOR_INDEX) {
+    GLint texId;
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texId);
+    ui_textures.insert (texId);
+  }
+
+  if (config.textures.dump && format == GL_COLOR_INDEX) {
+    // This sort of palette is easy, anything else will require a lot of work.
+    if (type == GL_UNSIGNED_BYTE) {
+      if (config.textures.dump) {
+        const int imageSize = width * height;
+        uint32_t  checksum  = crc32 (0, data, imageSize);
+
+       //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
+
+        PPrinny_DumpUncompressedTexLevel (
+          checksum,
+            level,
+              format,
+                width, height,
+                  imageSize,
+                    data );
+      }
+    } else {
+      dll_log.Log ( L"[ Tex Dump ] Color Index Format: (%lux%lu), Data Type: 0x%X",
+                      width, height, type );
+    }
+  }
+
+  }
+
   GLint texId;
   glGetIntegerv (GL_TEXTURE_BINDING_2D, &texId);
 
   if (data == nullptr) {
-    ui_textures.insert (texId);
+    //ui_textures.insert (texId);
 
     dll_log.Log ( L"[GL Texture] Id=%i, LOD: %i, (%ix%i)",
                     texId, level, width, height );
@@ -566,10 +746,24 @@ glTexImage2D_Detour ( GLenum  target,
       width = RES_X; height = RES_Y;
     }
 #endif
+  } else {
+    // Font Textures
+    //if (width == 1024 && height == 2048)
+    ui_textures.insert (texId);
   }
 
   glTexImage2D_Original (target, level, internalformat, width, height, border, format, type, data);
 }
+
+typedef GLvoid (WINAPI *glRenderbufferStorageMultisample_pfn)(
+  GLenum  target,
+  GLsizei samples,
+  GLenum  internalformat,
+  GLsizei width,
+  GLsizei height
+);
+
+glRenderbufferStorageMultisample_pfn glRenderBufferStorageMultisample = nullptr;
 
 typedef GLvoid (WINAPI *glRenderbufferStorage_pfn)(
   GLenum  target,
@@ -589,6 +783,12 @@ glRenderbufferStorage_Detour (
   GLsizei width,
   GLsizei height )
 {
+  if (glRenderBufferStorageMultisample == nullptr) {
+    glRenderBufferStorageMultisample =
+      (glRenderbufferStorageMultisample_pfn)
+        wglGetProcAddress_Original ("glRenderbufferStorageMultisample");
+  }
+
   dll_log.Log (L"[ GL Trace ]  >> Render Buffer - Internal Format: 0x%X <<", internalformat);
 
   if (internalformat == GL_DEPTH_COMPONENT)
@@ -610,8 +810,10 @@ glRenderbufferStorage_Detour (
   }
 #endif
 
+  // PROXY
+  //glRenderBufferStorageMultisample (target, 4, internalformat, width, height);
 
-  glRenderbufferStorage_Original (target, internalformat, width, height);
+  glRenderbufferStorage_Original   (target, internalformat, width, height);
 }
 
 typedef GLvoid (WINAPI *glBlitFramebuffer_pfn)(
@@ -887,6 +1089,51 @@ glUniformMatrix3fv_Detour (
   glUniformMatrix3fv_Original (location, count, transpose, value);
 }
 
+typedef GLvoid (WINAPI *glVertexAttrib4f_pfn)(
+  GLuint  index,
+  GLfloat v0,
+  GLfloat v1,
+  GLfloat v2,
+  GLfloat v3
+);
+
+glVertexAttrib4f_pfn glVertexAttrib4f_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glVertexAttrib4f_Detour ( GLuint  index,
+                          GLfloat v0,
+                          GLfloat v1,
+                          GLfloat v2,
+                          GLfloat v3 )
+{
+  //dll_log.Log ( L"VertexAttrib4f: idx=%lu, %f, %f, %f, %f",
+                  //index, v0, v1, v2, v3 );
+
+  return glVertexAttrib4f_Original (index, v0, v1, v2, v3);
+}
+
+typedef GLvoid (WINAPI *glVertexAttrib4fv_pfn)(
+        GLuint   index,
+  const GLfloat* v
+);
+
+glVertexAttrib4fv_pfn glVertexAttrib4fv_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glVertexAttrib4fv_Detour (       GLuint   index,
+                           const GLfloat* v )
+{
+  //dll_log.Log ( L"VertexAttrib4fv: idx=%lu, %f, %f, %f, %f",
+                  //index, v [0], v [1], v [2], v [3] );
+
+  return glVertexAttrib4fv_Original (index, v);
+}
+
+
 typedef GLvoid (WINAPI *glShaderSource_pfn)(
          GLuint    shader,
          GLsizei   count,
@@ -904,6 +1151,8 @@ glShaderSource_Detour (        GLuint   shader,
                         const GLubyte **string,
                         const  GLint   *length )
 {
+  uint32_t checksum = crc32 (0x00, (const void *)*string, strlen ((const char *)*string));
+
 #if 0
   dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu, count=%li, Src=%hs",
                   shader, count, *strg );
@@ -918,21 +1167,70 @@ glShaderSource_Detour (        GLuint   shader,
     memcpy (szTexWidth, szNewWidth, 31);
   }
 
-  glShaderSource_Original (shader, count, (const GLubyte **)&szShaderSrc, length);
+  char szShaderName [MAX_PATH];
+  sprintf (szShaderName, "shaders/%X.glsl", checksum);
+
+  if (GetFileAttributesA (szShaderName) != INVALID_FILE_ATTRIBUTES) {
+    FILE* fShader = fopen (szShaderName, "rb");
+
+    if (fShader != nullptr) {
+                    fseek  (fShader, 0, SEEK_END);
+      size_t size = ftell  (fShader);
+                    rewind (fShader);
+
+      char* szSrc = (char *)malloc (size + 1);
+      szSrc [size] = '\0';
+      fread (szSrc, size, 1, fShader);
+      fclose (fShader);
+
+      glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
+
+      //dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu (crc32: %X), count=%li, Src=%hs",
+                      //shader, checksum, count, szSrc );
+
+      free (szShaderSrc);
+      free (szSrc);
+
+      return;
+    }
+  }
 
 #if 0
-  dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu, count=%li, Src=%hs",
-                  shader, count, szShaderSrc );
+  if (shader == 1 /*|| checksum == 0xE37F8CFC*/) {
+const char* szSrc = 
+"#version 130\n"
+"uniform mat4 lastview;\n"
+"uniform sampler2D tex0;\n"
+"\n"
+"void main(void)\n"
+"{\n"
+"  ivec2 tex_size = textureSize (tex0, 0);\n"
+"\n"
+"  gl_Position = gl_ProjectionMatrix * lastview * gl_ModelViewMatrix * gl_Vertex;\n"
+"  vec2 tex_st = gl_MultiTexCoord0.st;\n"
+"  if (tex_st.s == 0.0 || tex_st.s == 1.0) tex_st.s = clamp (tex_st.s, -1.0 + 1.0 / (2.0 * float(tex_size.s)), 1.0 - 1.0 / (2.0 * float(tex_size.s)));\n"
+"  if (tex_st.t == 0.0 || tex_st.t == 1.0) tex_st.t = clamp (tex_st.t, -1.0 + 1.0 / (2.0 * float(tex_size.t)), 1.0 - 1.0 / (2.0 * float(tex_size.t)));\n"
+"  gl_TexCoord[0] = vec4 (tex_st, gl_MultiTexCoord0.p, gl_MultiTexCoord0.q);\n"
+"  gl_BackColor  = gl_Color;\n"
+"  gl_FrontColor = gl_Color;\n"
+"}";
+  glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
+
+  dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu (crc32: %X), count=%li, Src=%hs",
+                  shader, checksum, count, szSrc );
+  free (szShaderSrc);
+return;
+  }
 #endif
+
+  glShaderSource_Original (shader, count, (const GLubyte **)&szShaderSrc, length);
+
+  //dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu (crc32: %X), count=%li, Src=%hs",
+                  //shader, checksum, count, szShaderSrc );
 
   free (szShaderSrc);
 #endif
 }
-
-typedef PROC (APIENTRY *wglGetProcAddress_pfn)(LPCSTR);
-
-wglGetProcAddress_pfn wglGetProcAddress_Original = nullptr;
-
 
 __declspec (noinline)
 PROC
@@ -965,6 +1263,18 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     detoured                = true;
   }
 
+  if (! strcmp (szFuncName, "glVertexAttrib4f") && (ret != nullptr)) {
+    glVertexAttrib4f_Original = (glVertexAttrib4f_pfn)ret;
+    ret                       = (PROC)glVertexAttrib4f_Detour;
+    detoured                  = true;
+  }
+
+  if (! strcmp (szFuncName, "glVertexAttrib4fv") && (ret != nullptr)) {
+    glVertexAttrib4fv_Original = (glVertexAttrib4fv_pfn)ret;
+    ret                        = (PROC)glVertexAttrib4fv_Detour;
+    detoured                   = true;
+  }
+
   if (! strcmp (szFuncName, "glCompressedTexImage2D") && (ret != nullptr)) {
     glCompressedTexImage2D_Original = (glCompressedTexImage2D_pfn)ret;
     ret                             = (PROC)glCompressedTexImage2D_Detour;
@@ -984,6 +1294,12 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     detoured                    = true;
   }
 #endif
+
+  if (! strcmp (szFuncName, "glBindFramebuffer") && (ret != nullptr)) {
+    glBindFramebuffer_Original = (glBindFramebuffer_pfn)ret;
+    ret                        = (PROC)glBindFramebuffer_Detour;
+    detoured                   = true;
+  }
 
   if (! strcmp (szFuncName, "glBlitFramebuffer") && (ret != nullptr)) {
     glBlitFramebuffer_Original = (glBlitFramebuffer_pfn)ret;
@@ -1293,6 +1609,16 @@ PP_InitGLHooks (void)
                      (LPVOID*)&BMF_EndBufferSwap );
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glDeleteTextures",
+                              glDeleteTextures_Detour,
+                   (LPVOID *)&glDeleteTextures_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glTexSubImage2D",
+                              glTexSubImage2D_Detour,
+                   (LPVOID *)&glTexSubImage2D_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "glTexImage2D",
                               glTexImage2D_Detour,
                    (LPVOID *)&glTexImage2D_Original );
@@ -1342,8 +1668,6 @@ PP_InitGLHooks (void)
                               "glAlphaFunc",
                                glAlphaFunc_Detour,
                     (LPVOID *)&glAlphaFunc_Original );
-
-
 
       // It sucks to have to hook THESE functions, but there are display lists
       //   that have wrong state setup.

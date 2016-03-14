@@ -757,6 +757,7 @@ GetAsyncKeyState_Detour (_In_ int vKey)
     PPrinny_ConsumeVKey (vKey);
   }
 
+#if 0
   // Block Left Alt
   if (vKey == VK_LMENU)
     if (config.input.block_left_alt)
@@ -766,6 +767,7 @@ GetAsyncKeyState_Detour (_In_ int vKey)
   if (vKey == VK_LCONTROL)
     if (config.input.block_left_ctrl)
       PPrinny_ConsumeVKey (vKey);
+#endif
 
   return GetAsyncKeyState_Original (vKey);
 }
@@ -1023,7 +1025,7 @@ pp::InputManager::Hooker::Draw (void)
 
   console_text = output;
 
-  BMF_DrawExternalOSD ("ToZ Fix", output.c_str ());
+  BMF_DrawExternalOSD ("Pretty Prinny", output.c_str ());
 }
 
 DWORD

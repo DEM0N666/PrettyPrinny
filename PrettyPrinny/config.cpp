@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.1.1";
+std::wstring PPRINNY_VER_STR = L"0.2.0";
 pp_config_s config;
 
 struct {

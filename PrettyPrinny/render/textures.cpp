@@ -41,8 +41,10 @@ typedef struct {
 #define DDSD_DEPTH       0x00800000
 
 #define DDPF_ALPHAPIXELS            0x00000001
+#define DDPF_ALPHA                  0x00000002
 #define DDPF_FOURCC                 0x00000004
 #define DDPF_RGB                    0x00000040
+#define DDPF_LUMINANCE              0x00020000
 
 #define DDSCAPS_TEXTURE             0x00001000
 
@@ -87,14 +89,14 @@ PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
 
   switch (format) {
     case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
-      dll_log.Log (L"[ Tex Dump ] DXT1");
+      //dll_log.Log (L"[ Tex Dump ] DXT1");
 
       dds_fmt.dwFourCC = MAKEFOURCC ('D', 'X', 'T', '1');
       dxt1             = true;
       break;
 
     case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
-      dll_log.Log (L"[ Tex Dump ] DXT1 (RGBA)");
+      //dll_log.Log (L"[ Tex Dump ] DXT1 (RGBA)");
 
       dds_fmt.dwFourCC    = MAKEFOURCC ('D', 'X', 'T', '1');
       dds_fmt.dwFlags    |= DDPF_ALPHAPIXELS;
@@ -103,7 +105,7 @@ PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
       break;
 
     case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
-      dll_log.Log (L"[ Tex Dump ] DXT3");
+      //dll_log.Log (L"[ Tex Dump ] DXT3");
 
       dds_fmt.dwFourCC    = MAKEFOURCC ('D', 'X', 'T', '3');
       dds_fmt.dwFlags    |= DDPF_ALPHAPIXELS;
@@ -111,7 +113,7 @@ PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
       break;
 
     case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-      dll_log.Log (L"[ Tex Dump ] DXT5");
+      //dll_log.Log (L"[ Tex Dump ] DXT5");
 
       dds_fmt.dwFourCC    = MAKEFOURCC ('D', 'X', 'T', '5');
       dds_fmt.dwFlags    |= DDPF_ALPHAPIXELS;
@@ -163,8 +165,13 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
     CreateDirectoryW (L"dump", nullptr);
 
   wchar_t wszOutName [MAX_PATH];
-  wsprintf ( wszOutName, L"dump\\Uncompressed_%lu_%X.dds",
-               level, crc32 );
+
+  if (format != GL_COLOR_INDEX)
+    wsprintf ( wszOutName, L"dump\\Uncompressed_%lu_%X.dds",
+                 level, crc32 );
+  else
+    wsprintf ( wszOutName, L"dump\\Paletted_%lu_%X.dds",
+                 level, crc32 );
 
   // Early-Out if the texutre was already dumped.
   if (GetFileAttributes (wszOutName) != INVALID_FILE_ATTRIBUTES)
@@ -192,6 +199,25 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
       dds_fmt.dwBBitMask    = 0x000000ff;
 
       dds_fmt.dwFlags      |= DDPF_RGB | DDPF_ALPHAPIXELS;
+
+      dds_hdr.dwPitchOrLinearSize = 4 * width;
+      break;
+
+    case GL_COLOR_INDEX:
+      dds_fmt.dwRGBBitCount = 8;
+
+#if 0
+      dds_fmt.dwABitMask    = 0xff;
+      dds_fmt.dwFlags      |= DDPF_ALPHA;
+#else
+      dds_fmt.dwRBitMask    = 0xFF;
+      dds_fmt.dwGBitMask    = 0x00;
+      dds_fmt.dwBBitMask    = 0x00;
+      dds_fmt.dwABitMask    = 0x00;
+      dds_fmt.dwFlags      |= DDPF_LUMINANCE;
+#endif
+
+      dds_hdr.dwPitchOrLinearSize = (width * 8 + 7) / 8;
       break;
 
     default:
@@ -205,7 +231,6 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
                                 DDSD_PITCH;
   dds_hdr.dwHeight            = height;
   dds_hdr.dwWidth             = width;
-  dds_hdr.dwPitchOrLinearSize = 4 * width;//max (1, ((width + 3) / 4));
   dds_hdr.dwCaps              = DDSCAPS_TEXTURE;
 
   memcpy (&dds_hdr.ddspf, &dds_fmt, sizeof DDS_PIXELFORMAT);
