@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.2.0";
+std::wstring PPRINNY_VER_STR = L"0.2.1";
 pp_config_s config;
 
 struct {
@@ -58,6 +58,11 @@ struct {
 struct {
   pp::ParameterFloat*   tolerance;
 } stutter;
+
+struct {
+  pp::ParameterStringW* red_text;
+  pp::ParameterStringW* blue_text;
+} colors;
 
 struct {
   pp::ParameterBool*    dump;
@@ -311,6 +316,27 @@ PPrinny_LoadConfig (std::wstring name) {
         L"Dump" );
 
 
+  colors.blue_text =
+    static_cast <pp::ParameterStringW *>
+      (g_ParameterFactory.create_parameter <std::wstring> (
+        L"Blue Text Color")
+      );
+  colors.blue_text->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Colors",
+        L"BlueText" );
+
+  colors.red_text =
+    static_cast <pp::ParameterStringW *>
+      (g_ParameterFactory.create_parameter <std::wstring> (
+        L"Red Text Color")
+      );
+  colors.red_text->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Colors",
+        L"RedText" );
+
+
 
   input.block_left_alt =
     static_cast <pp::ParameterBool *>
@@ -454,6 +480,32 @@ PPrinny_LoadConfig (std::wstring name) {
 
   if (stutter.tolerance->load ())
     config.stutter.tolerance = stutter.tolerance->get_value ();
+
+
+  // TODO: RGB Parameter Type
+  if (colors.blue_text->load ()) {
+    uint32_t r,g,b;
+
+    wchar_t* wszBlueColor = wcsdup (colors.blue_text->get_value ().c_str ());
+    swscanf (wszBlueColor, L"%lu,%lu,%lu", &r, &g, &b);
+    free (wszBlueColor);
+
+    config.colors.blue_text.r = (float)(r & 0xFF) / 255.0f;
+    config.colors.blue_text.g = (float)(g & 0xFF) / 255.0f;
+    config.colors.blue_text.b = (float)(b & 0xFF) / 255.0f;
+  }
+
+  if (colors.red_text->load ()) {
+    uint32_t r,g,b;
+
+    wchar_t* wszRedColor = wcsdup (colors.red_text->get_value ().c_str ());
+    swscanf (wszRedColor, L"%lu,%lu,%lu", &r, &g, &b);
+    free (wszRedColor);
+
+    config.colors.red_text.r = (float)(r & 0xFF) / 255.0f;
+    config.colors.red_text.g = (float)(g & 0xFF) / 255.0f;
+    config.colors.red_text.b = (float)(b & 0xFF) / 255.0f;
+  }
 
 
 //  if (textures.log->load ())

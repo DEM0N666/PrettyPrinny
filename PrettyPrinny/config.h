@@ -61,6 +61,20 @@ struct pp_config_s
   } window;
 
   struct {
+    struct {
+      float r = 0.50f;
+      float g = 0.50f;
+      float b = 0.90f;
+    } blue_text;
+
+    struct {
+      float r = 0.90f;
+      float g = 0.10f;
+      float b = 0.10f;
+    } red_text;
+  } colors;
+
+  struct {
     float    tolerance           = 0.333333f; // 33%
   } stutter;
 

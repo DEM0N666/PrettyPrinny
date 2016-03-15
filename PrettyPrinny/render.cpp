@@ -318,17 +318,6 @@ glCompressedTexImage2D_Detour (
   if (checksum == 0xD474EABE ||
       checksum == 0xD5B07A99 ||
 
-/*
-      checksum == 0xFD954B60 ||
-      checksum == 0x868F2CB9 ||
-
-      checksum == 0x81C1715B ||
-      checksum == 0xE6DC24D6 ||
-
-      checksum == 0xC549C9DF ||
-      checksum == 0x18DC669  ||
-*/
-
       checksum == 0xB4F15F92 ||
       checksum == 0x93C585F7 ||
 
@@ -1134,6 +1123,24 @@ glVertexAttrib4fv_Detour (       GLuint   index,
 }
 
 
+typedef GLvoid (WINAPI *glGetShaderiv_pfn)(
+  GLuint shader,
+  GLenum pname,
+  GLint *params
+);
+
+glGetShaderiv_pfn glGetShaderiv_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glGetShaderiv_Detour ( GLuint shader,
+                       GLenum pname,
+                       GLint* params )
+{
+  return glGetShaderiv_Original (shader, pname, params);
+}
+
 typedef GLvoid (WINAPI *glShaderSource_pfn)(
          GLuint    shader,
          GLsizei   count,
@@ -1142,6 +1149,83 @@ typedef GLvoid (WINAPI *glShaderSource_pfn)(
 );
 
 glShaderSource_pfn glShaderSource_Original = nullptr;
+
+#define GL_SHADER_TYPE                      0x8B4F
+#define GL_FRAGMENT_SHADER                  0x8B30
+#define GL_VERTEX_SHADER                    0x8B31
+
+
+void
+PPrinny_DumpShader ( uint32_t    checksum,
+                     GLuint      shader,
+                     const char* string )
+{
+  if (GetFileAttributes (L"dump") == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (L"dump", nullptr);
+
+  if (GetFileAttributes (L"dump/shaders") == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (L"dump/shaders", nullptr);
+
+
+  GLint type;
+  glGetShaderiv_Original (shader, GL_SHADER_TYPE, &type);
+
+  char szShaderDump [MAX_PATH];
+  sprintf ( szShaderDump, "dump/shaders/%s_%08X.glsl",
+              type == GL_VERTEX_SHADER ? "Vertex" : "Fragment",
+                checksum );
+
+
+  if (GetFileAttributesA (szShaderDump) == INVALID_FILE_ATTRIBUTES) {
+    FILE* fShader = fopen (szShaderDump, "wb");
+    fwrite ((const void *)string, strlen (string + 1), 1, fShader);
+    fclose (fShader);
+  }
+}
+
+char*
+PPrinny_EvaluateShaderVariables (char* szInput)
+{
+  char* szRedText  = strstr (szInput, "%PrettyPrinny.Colors.RedText%");
+  char* szBlueText = strstr (szInput, "%PrettyPrinny.Colors.BlueText%");
+
+  if (szRedText != nullptr || szBlueText != nullptr) {
+    if (szRedText) {
+      int len = snprintf ( szRedText, 29,
+                             "vec3 (%3.2f,%3.2f,%3.2f)",
+                               config.colors.red_text.r,
+                                 config.colors.red_text.g,
+                                   config.colors.red_text.b );
+      *(szRedText + len) = *(szRedText + 29);
+
+      // Add spaces for all missing characters
+      for (int i = len+1; i < 30; i++) {
+        *(szRedText + i) = ' ';
+      }
+    }
+
+    if (szBlueText) {
+      int len = snprintf ( szBlueText, 30,
+                             "vec3 (%3.2f,%3.2f,%3.2f)",
+                               config.colors.blue_text.r,
+                                 config.colors.blue_text.g,
+                                   config.colors.blue_text.b );
+      *(szBlueText + len) = *(szBlueText + 30);
+
+      // Add spaces for all missing characters
+      for (int i = len+1; i < 31; i++) {
+        *(szBlueText + i) = ' ';
+      }
+    }
+
+    //dll_log.Log (L"%hs", szInput);
+
+    // TODO: Allocate a new buffer to fit the replaced variables
+    return szInput;
+  }
+
+  return szInput;
+}
 
 __declspec (noinline)
 GLvoid
@@ -1153,11 +1237,11 @@ glShaderSource_Detour (        GLuint   shader,
 {
   uint32_t checksum = crc32 (0x00, (const void *)*string, strlen ((const char *)*string));
 
-#if 0
-  dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu, count=%li, Src=%hs",
-                  shader, count, *strg );
-  glShaderSource_Original (shader, count, string, length);
-#else
+  PPrinny_DumpShader (checksum, shader, (const char *)*string);
+
+  char szShaderName [MAX_PATH];
+  sprintf (szShaderName, "shaders/%X.glsl", checksum);
+
   char* szShaderSrc = strdup ((const char *)*string);
   char* szTexWidth  = strstr (szShaderSrc, "const float texWidth = 720.0;  ");
 
@@ -1167,8 +1251,6 @@ glShaderSource_Detour (        GLuint   shader,
     memcpy (szTexWidth, szNewWidth, 31);
   }
 
-  char szShaderName [MAX_PATH];
-  sprintf (szShaderName, "shaders/%X.glsl", checksum);
 
   if (GetFileAttributesA (szShaderName) != INVALID_FILE_ATTRIBUTES) {
     FILE* fShader = fopen (szShaderName, "rb");
@@ -1183,10 +1265,9 @@ glShaderSource_Detour (        GLuint   shader,
       fread (szSrc, size, 1, fShader);
       fclose (fShader);
 
-      glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
+      szSrc = PPrinny_EvaluateShaderVariables (szSrc);
 
-      //dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu (crc32: %X), count=%li, Src=%hs",
-                      //shader, checksum, count, szSrc );
+      glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
 
       free (szShaderSrc);
       free (szSrc);
@@ -1195,41 +1276,9 @@ glShaderSource_Detour (        GLuint   shader,
     }
   }
 
-#if 0
-  if (shader == 1 /*|| checksum == 0xE37F8CFC*/) {
-const char* szSrc = 
-"#version 130\n"
-"uniform mat4 lastview;\n"
-"uniform sampler2D tex0;\n"
-"\n"
-"void main(void)\n"
-"{\n"
-"  ivec2 tex_size = textureSize (tex0, 0);\n"
-"\n"
-"  gl_Position = gl_ProjectionMatrix * lastview * gl_ModelViewMatrix * gl_Vertex;\n"
-"  vec2 tex_st = gl_MultiTexCoord0.st;\n"
-"  if (tex_st.s == 0.0 || tex_st.s == 1.0) tex_st.s = clamp (tex_st.s, -1.0 + 1.0 / (2.0 * float(tex_size.s)), 1.0 - 1.0 / (2.0 * float(tex_size.s)));\n"
-"  if (tex_st.t == 0.0 || tex_st.t == 1.0) tex_st.t = clamp (tex_st.t, -1.0 + 1.0 / (2.0 * float(tex_size.t)), 1.0 - 1.0 / (2.0 * float(tex_size.t)));\n"
-"  gl_TexCoord[0] = vec4 (tex_st, gl_MultiTexCoord0.p, gl_MultiTexCoord0.q);\n"
-"  gl_BackColor  = gl_Color;\n"
-"  gl_FrontColor = gl_Color;\n"
-"}";
-  glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
-
-  dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu (crc32: %X), count=%li, Src=%hs",
-                  shader, checksum, count, szSrc );
-  free (szShaderSrc);
-return;
-  }
-#endif
-
   glShaderSource_Original (shader, count, (const GLubyte **)&szShaderSrc, length);
 
-  //dll_log.Log ( L"[GL Shaders] Shader Obj Id=%lu (crc32: %X), count=%li, Src=%hs",
-                  //shader, checksum, count, szShaderSrc );
-
   free (szShaderSrc);
-#endif
 }
 
 __declspec (noinline)
@@ -1261,6 +1310,12 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     glShaderSource_Original = (glShaderSource_pfn)ret;
     ret                     = (PROC)glShaderSource_Detour;
     detoured                = true;
+  }
+
+  if (! strcmp (szFuncName, "glGetShaderiv") && (ret != nullptr)) {
+    glGetShaderiv_Original = (glGetShaderiv_pfn)ret;
+    ret                    = (PROC)glGetShaderiv_Detour;
+    detoured               = true;
   }
 
   if (! strcmp (szFuncName, "glVertexAttrib4f") && (ret != nullptr)) {
@@ -1583,13 +1638,26 @@ wglCreateContext_Detour (HDC hDC)
     PPrinny_EnableHook (wglCreateContext_Hook);
 
 
-    if (ret != 0)
+    if (ret != 0) {
+      wglMakeCurrent           (hDC, ret);
+      wglGetProcAddress_Detour ("glDebugMessageCallbackARB");
+      wglMakeCurrent           (NULL, NULL);
+
       return ret;
+    }
 
     dll_log.Log (L"[   XXX   ] wglCreateContextAttribsARB (...) failed?!\n");
   }
 
-  return wglCreateContext_Original (hDC);
+  HGLRC ret = wglCreateContext_Original (hDC);
+
+  if (ret != 0) {
+    wglMakeCurrent           (hDC, ret);
+    wglGetProcAddress_Detour ("glDebugMessageCallbackARB");
+    wglMakeCurrent           (NULL, NULL);
+  }
+
+  return ret;
 }
 
 

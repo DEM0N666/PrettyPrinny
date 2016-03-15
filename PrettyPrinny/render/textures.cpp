@@ -72,8 +72,11 @@ PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
   if (GetFileAttributes (L"dump") == INVALID_FILE_ATTRIBUTES)
     CreateDirectoryW (L"dump", nullptr);
 
+  if (GetFileAttributes (L"dump/textures") == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (L"dump/textures", nullptr);
+
   wchar_t wszOutName [MAX_PATH];
-  wsprintf ( wszOutName, L"dump\\Compressed_%lu_%X.dds",
+  wsprintf ( wszOutName, L"dump\\textures\\Compressed_%lu_%X.dds",
                level, crc32 );
 
   // Early-Out if the texutre was already dumped.
@@ -167,10 +170,10 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
   wchar_t wszOutName [MAX_PATH];
 
   if (format != GL_COLOR_INDEX)
-    wsprintf ( wszOutName, L"dump\\Uncompressed_%lu_%X.dds",
+    wsprintf ( wszOutName, L"dump\\textures\\Uncompressed_%lu_%X.dds",
                  level, crc32 );
   else
-    wsprintf ( wszOutName, L"dump\\Paletted_%lu_%X.dds",
+    wsprintf ( wszOutName, L"dump\\textures\\Paletted_%lu_%X.dds",
                  level, crc32 );
 
   // Early-Out if the texutre was already dumped.
