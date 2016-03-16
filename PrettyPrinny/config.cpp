@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.2.1";
+std::wstring PPRINNY_VER_STR = L"0.3.0";
 pp_config_s config;
 
 struct {
@@ -378,6 +378,7 @@ PPrinny_LoadConfig (std::wstring name) {
       L"PrettyPrinny.Input",
         L"BlockAllKeys" );
 
+#if 0
   input.wrap_xinput = 
     static_cast <pp::ParameterBool *>
       (g_ParameterFactory.create_parameter <bool> (
@@ -387,7 +388,7 @@ PPrinny_LoadConfig (std::wstring name) {
     dll_ini,
       L"PrettyPrinny.Input",
         L"WrapXInput" );
-
+#endif
 
   sys.version =
     static_cast <pp::ParameterStringW *>
@@ -528,8 +529,8 @@ PPrinny_LoadConfig (std::wstring name) {
   //if (input.block_all_keys->load ())
     //config.input.block_all_keys = input.block_all_keys->get_value ();
 
-  if (input.wrap_xinput->load ())
-    config.input.wrap_xinput = input.wrap_xinput->get_value ();
+/////  if (input.wrap_xinput->load ())
+/////    config.input.wrap_xinput = input.wrap_xinput->get_value ();
 
   if (sys.version->load ())
     config.system.version = sys.version->get_value ();
@@ -548,10 +549,10 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   //render.allow_background->set_value  (config.render.allow_background);
   //render.allow_background->store      ();
 
-#if 0
   render.msaa_samples->set_value      (config.render.msaa_samples);
   render.msaa_samples->store          ();
 
+#if 0
   render.msaa_quality->set_value      (config.render.msaa_quality);
   render.msaa_quality->store          ();
 
@@ -636,8 +637,8 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   //input.block_all_keys->set_value  (config.input.block_all_keys);
   //input.block_all_keys->store      ();
 
-  input.wrap_xinput->set_value      (config.input.wrap_xinput);
-  input.wrap_xinput->store          ();
+/////  input.wrap_xinput->set_value      (config.input.wrap_xinput);
+/////  input.wrap_xinput->store          ();
 
   sys.version->set_value  (PPRINNY_VER_STR);
   sys.version->store      ();

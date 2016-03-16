@@ -190,6 +190,7 @@ SetWindowLongA_Detour (
               nIndex == GWL_EXSTYLE ? L"GWL_EXSTYLE" :
                                       L" GWL_STYLE ",
                       dwNewLong );
+    pp::RenderFix::draw_state.window_changed = true;
   }
 
 // TODO: Restore this functionality

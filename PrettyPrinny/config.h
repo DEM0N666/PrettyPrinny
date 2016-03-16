@@ -46,6 +46,7 @@ struct pp_config_s
   struct {
     bool     bypass_intel_gl     = true;
     bool     allow_gl_cpu_sync   = false;
+    bool     optimize_ctx_mgmt   = true;
     bool     debug_mode          = false;
     bool     support_old_drivers = false;
   } compatibility;
@@ -85,13 +86,17 @@ struct pp_config_s
   } textures;
 
   struct {
+    bool dump       = false;
+  } shaders;
+
+  struct {
     int  num_frames = 0;
     bool shaders    = false;
     bool ui         = false; // General-purpose UI stuff
   } trace;
 
   struct {
-    bool wrap_xinput    = true;
+    bool wrap_xinput     = false; // PENDING REMOVAL (obsolete w/ 3/16 patch)
     bool block_left_alt  = false;
     bool block_left_ctrl = false;
     bool block_windows   = false;
