@@ -8,7 +8,7 @@ Unzip it and copy it to your Disgaea PC folder. You can find your Disgaea PC fol
 If you are NOT using a Steam controller, delete the `Pad.cfg` file.
 
 ### How do I uninstall this?
-Run "UninstallPrettyPrinny.bat"
+Run `UninstallPrettyPrinny.bat`
 
 ### After installing this, my controller no longer works properly.
 Go into `PrettyPrinny.ini` and change the key **WrapXInput**, which is located in the `[PrettyPrinny.Input]` section to **"false"**. Your controller should work again.
