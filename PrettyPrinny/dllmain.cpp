@@ -27,6 +27,7 @@
 #include "hook.h"
 
 #include "timing.h"
+#include "display.h"
 #include "render.h"
 #include "input.h"
 #include "window.h"
@@ -88,6 +89,7 @@ DllThread (LPVOID user)
 
   // Plugin State
   if (PPrinny_Init_MinHook () == MH_OK) {
+    pp::DisplayFix::Init    ();
     pp::RenderFix::Init     ();
     pp::InputManager::Init  ();
 
@@ -124,6 +126,7 @@ DllMain (HMODULE hModule,
       pp::RenderFix::Shutdown     ();
       pp::InputManager::Shutdown  ();
       pp::TimingFix::Shutdown     ();
+      pp::DisplayFix::Shutdown    ();
 
       PPrinny_UnInit_MinHook ();
       PPrinny_SaveConfig     ();

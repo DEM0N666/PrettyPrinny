@@ -38,13 +38,6 @@ pp::RenderFix::pp_draw_states_s
 extern uint32_t
 crc32 (uint32_t crc, const void *buf, size_t size);
 
-struct {
-  bool use           = true;
-  bool dirty         = false;
-  bool early_resolve = false;
-  bool conservative  = false;
-} msaa;
-
 bool drawing_main_scene = false;
 
 typedef GLvoid (WINAPI *glBindRenderbuffer_pfn)(
@@ -87,6 +80,10 @@ typedef GLvoid (WINAPI *glGenFramebuffers_pfn)(
   GLuint  *framebuffers
 );
 
+typedef GLenum (WINAPI *glCheckFramebufferStatus_pfn)(
+  GLenum target
+);
+
 typedef GLvoid (WINAPI *glReadPixels_pfn)(
   GLint   x,
   GLint   y,
@@ -108,6 +105,8 @@ typedef GLvoid (WINAPI *glDrawBuffers_pfn)(
 #define GL_DRAW_FRAMEBUFFER_BINDING       0x8CA6
 #define GL_READ_FRAMEBUFFER_BINDING       0x8CAA
 
+#define GL_FRAMEBUFFER_COMPLETE           0x8CD5
+
 #define GL_RENDERBUFFER_BINDING           0x8CA7
 #define GL_RENDERBUFFER                   0x8D41
 
@@ -115,14 +114,29 @@ typedef GLvoid (WINAPI *glDrawBuffers_pfn)(
 #define GL_DRAW_FRAMEBUFFER               0x8CA9
 #define GL_FRAMEBUFFER                    0x8D40
 
+#define GL_DRAW_BUFFER0                   0x8825
+
 #define GL_COLOR_ATTACHMENT0              0x8CE0
 #define GL_DEPTH_ATTACHMENT               0x8D00
 
 #define GL_DEPTH_COMPONENT24              0x81A6
 #define GL_RG                             0x8227
+#define GL_R8                             0x8229
 #define GL_RG8                            0x8051
 #define GL_RGBA8                          0x8058
+#define GL_R16F                           0x822D
+#define GL_RG16F                          0x822F
+#define GL_RGB16F                         0x881B
 #define GL_RGBA16F                        0x881A
+#define GL_RGB32F                         0x8815
+
+#define GL_R11F_G11F_B10F                 0x8C3A
+#define GL_RGB10_A2                       0x8059
+
+#define GL_CLAMP_TO_EDGE                  0x812F
+#define GL_MIRRORED_REPEAT                0x8370
+
+#define GL_TEXTURE_SWIZZLE_RGBA           0x8E46
 
 glGenRenderbuffers_pfn               glGenRenderbuffers                 = nullptr;
 glBindRenderbuffer_pfn               glBindRenderbuffer                 = nullptr;
@@ -130,7 +144,7 @@ glRenderbufferStorageMultisample_pfn glRenderbufferStorageMultisample   = nullpt
 glDeleteRenderbuffers_pfn            glDeleteRenderbuffers_Original     = nullptr;
 glRenderbufferStorage_pfn            glRenderbufferStorage_Original     = nullptr;
 
-glDrawBuffers_pfn                    glDrawBuffers                      = nullptr;
+glDrawBuffers_pfn                    glDrawBuffers_Original             = nullptr;
 
 glGenFramebuffers_pfn                glGenFramebuffers                  = nullptr;
 glBindFramebuffer_pfn                glBindFramebuffer_Original         = nullptr;
@@ -138,6 +152,7 @@ glBlitFramebuffer_pfn                glBlitFramebuffer_Original         = nullpt
 glFramebufferTexture2D_pfn           glFramebufferTexture2D_Original    = nullptr;
 glFramebufferRenderbuffer_pfn        glFramebufferRenderbuffer_Original = nullptr;
 glColorMaski_pfn                     glColorMaski                       = nullptr;
+glCheckFramebufferStatus_pfn         glCheckFramebufferStatus           = nullptr;
 
 glBindTexture_pfn                    glBindTexture_Original             = nullptr;
 glTexImage2D_pfn                     glTexImage2D_Original              = nullptr;
@@ -195,7 +210,6 @@ wglMakeCurrent_pfn                   wglMakeCurrent_Original            = nullpt
 BMF_BeginBufferSwap_pfn              BMF_BeginBufferSwap                = nullptr;
 BMF_EndBufferSwap_pfn                BMF_EndBufferSwap                  = nullptr;
 
-
 extern void
 PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
                                  GLint    level,
@@ -220,26 +234,61 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
 
 #include <map>
 
-struct msaa_tex_ref_s {
-  bool   dirty      = false;
+bool deferred_msaa = false;
 
-  GLuint rbo        = GL_NONE;
-  GLint  color_loc  = -1;
-  GLuint parent_fbo = -1;
+struct {
+  GLuint color        = GL_NONE;
+  GLuint position     = GL_NONE;
+  GLuint normal       = GL_NONE;
+  GLuint depth        = GL_NONE;
+} render_targets;
+
+struct msaa_ref_s {
+  bool   dirty      = false;
+  bool   active     = false;
+
+  GLuint  rbo        = GL_NONE;
+
+  GLsizei width      = 0;
+  GLsizei height     = 0;
+  GLenum  format     = GL_INVALID_ENUM;
+
+  GLint   color_loc  = -1;
+  GLuint  parent_fbo = -1;
 };
 
-struct msaa_rbo_ref_s {
-  bool   dirty      = false;
+class MSAABackend {
+public:
+  GLuint resolve_fbo = 0;
 
-  GLuint rbo        = GL_NONE;
-  GLint  color_loc  = -1;
-  GLuint parent_fbo = -1;
-};
+  std::unordered_map <GLuint, msaa_ref_s*> backing_textures;
+  std::unordered_map <GLuint, msaa_ref_s*> backing_rbos;
 
-GLuint msaa_resolve_fbo = 0;
+  bool use           = true;
+  bool dirty         = false;
+  bool early_resolve = false;
+  bool conservative  = false;
 
-std::unordered_map <GLuint, msaa_tex_ref_s> msaa_backing_tex;
-std::unordered_map <GLuint, msaa_rbo_ref_s> msaa_backing_rbo;
+  bool   deleteTexture      ( GLuint  texId );
+  bool   createTexture      ( GLuint  texId,   GLenum  internalformat,
+                              GLsizei width,   GLsizei height );
+  bool   attachTexture      ( GLenum  target,  GLenum  attachment,
+                              GLuint  texture, GLenum textarget,
+                              GLuint  level );
+
+  bool   deleteRenderbuffer ( GLuint  rboId );
+  bool   createRenderbuffer (                  GLenum  internalformat,
+                              GLsizei width,   GLsizei height );
+
+  bool   attachRenderbuffer ( GLenum  target,  GLenum  attachment,
+                              GLuint  renderbuffer );
+
+  bool   resolveTexture     ( GLuint texId );
+
+  GLuint bindFramebuffer    ( GLenum target, GLuint framebuffer );
+} msaa;
+
+GLuint active_fbo       = 0;
 
 class PP_Framebuffer {
 public:
@@ -490,14 +539,84 @@ glCompressedTexImage2D_Detour (
             imageSize, data );
 }
 
-void
-PP_MSAA_ResolveTexture (GLuint tex)
+GLuint
+MSAABackend::bindFramebuffer (GLenum target, GLuint framebuffer)
 {
-  std::unordered_map <GLuint, msaa_tex_ref_s>::iterator it =
-    msaa_backing_tex.find (tex);
+  if (config.render.msaa_samples < 2)
+    return framebuffer;
 
-  if (it != msaa_backing_tex.end ()) {
-    if (it->second.dirty) {
+  // On repeated failures, stop reporting errors and turn MSAA off completely...
+  static int failures = 0;
+
+  if (! use) {
+    framebuffer = resolve_fbo;
+  } else if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) {
+
+    // On failure to validate FBO, fallback to resolve_fbo
+    if (glCheckFramebufferStatus (target) != GL_FRAMEBUFFER_COMPLETE) {
+      dll_log.Log ( L"[   MSAA   ] Framebuffer failed completeness check, "
+                    L"falling back to single-sampling (chance=%lu) !!!",
+                      failures++ );
+
+      framebuffer = resolve_fbo;
+
+      if (failures > 5) {
+        dll_log.Log ( L"[   MSAA   ]  -- Too many failures, "
+                      L"disabling MSAA!" );
+        use = false;
+      }
+    }
+
+    std::unordered_map <GLuint, msaa_ref_s*>::iterator tex_it =
+      backing_textures.begin ();
+
+    while (tex_it != backing_textures.end ()) {
+      if (/*tex_it->second->color_loc >= 0 &&*/tex_it->second->color_loc <= 2)
+        tex_it->second->dirty = true;
+
+      ++tex_it;
+    }
+
+    std::unordered_map <GLuint, msaa_ref_s*>::iterator rbo_it =
+      backing_rbos.begin ();
+
+    while (rbo_it != backing_rbos.end ()) {
+      rbo_it->second->dirty = true;
+
+      ++rbo_it;
+    }
+
+    //dirty = true;
+  }
+
+  // Simple pass-through to handle scenarios were MSAA rasterization
+  //   is skipped.
+  if (framebuffer == resolve_fbo && resolve_fbo != 0) {
+    glBindFramebuffer_Original (target, framebuffer);
+
+    GLenum buffers [] = { GL_COLOR_ATTACHMENT0,
+                          GL_COLOR_ATTACHMENT0 + 1,
+                          GL_COLOR_ATTACHMENT0 + 2 };
+    glDrawBuffers_Original (3, buffers);
+  }
+
+  return framebuffer;
+}
+
+bool
+MSAABackend::resolveTexture (GLuint texId)
+{
+  std::unordered_map <GLuint, msaa_ref_s*>::iterator it =
+    backing_textures.find (texId);
+
+  if (it != backing_textures.end ()) {
+    if (it->second->dirty) {
+      if (pp::RenderFix::tracer.log) {
+        dll_log.Log ( L"[ GL Trace ] Resolving Dirty Multisampled Texture..."
+                      L" (tid=%lu)",
+                        texId );
+      }
+
       // BLIT from RBO to TEX
 
       GLuint read_buffer,
@@ -511,16 +630,16 @@ PP_MSAA_ResolveTexture (GLuint tex)
       glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, 2);
 
       int buffer = 
-        it->second.color_loc >= 0 ?
-          it->second.color_loc + GL_COLOR_ATTACHMENT0 :
+        it->second->color_loc >= 0 ?
+          it->second->color_loc + GL_COLOR_ATTACHMENT0 :
           GL_NONE;
 
       int bitmask =
-        it->second.color_loc >= 0 ?
+        it->second->color_loc >= 0 ?
           GL_COLOR_BUFFER_BIT :
-          GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+          GL_DEPTH_BUFFER_BIT/* | GL_STENCIL_BUFFER_BIT*/;
 
-      glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, msaa_resolve_fbo);
+      glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, resolve_fbo);
 
       glReadBuffer (buffer);
       glDrawBuffer (buffer);
@@ -535,9 +654,13 @@ PP_MSAA_ResolveTexture (GLuint tex)
       glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, draw_buffer);
       glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, read_buffer);
 
-      it->second.dirty = false;
+      it->second->dirty = false;
+
+      return true;
     }
   }
+
+  return false;
 }
 
 __declspec (noinline)
@@ -545,82 +668,18 @@ GLvoid
 WINAPI
 glBindFramebuffer_Detour (GLenum target, GLuint framebuffer)
 {
-  if (config.render.msaa_samples < 2)
-    return glBindFramebuffer_Original (target, framebuffer);
+  GLuint previous_fbo = active_fbo;
+         active_fbo   = framebuffer;
 
-
-  //dll_log.Log ( L"[GL CallLog] glBindFramebuffer (0x%X, %lu)",
-                  //target, framebuffer );
+  if (pp::RenderFix::tracer.log)
+    dll_log.Log ( L"[ GL Trace ] glBindFramebuffer (0x%X, %lu)",
+                    target, framebuffer );
 
   if (framebuffer == 2) {
-    if (! msaa.use) {
-      framebuffer = msaa_resolve_fbo;
-    } else {
-    std::unordered_map <GLuint, msaa_tex_ref_s>::iterator tex_it =
-      msaa_backing_tex.begin ();
-
-    while (tex_it != msaa_backing_tex.end ()) {
-      tex_it->second.dirty = true;
-
-      ++tex_it;
-    }
-
-    std::unordered_map <GLuint, msaa_rbo_ref_s>::iterator rbo_it =
-      msaa_backing_rbo.begin ();
-
-    while (rbo_it != msaa_backing_rbo.end ()) {
-      rbo_it->second.dirty = true;
-
-      ++rbo_it;
-    }
-
-    msaa.dirty = true;
-    }
-  }
-
-
-  else {
-    GLuint current_fbo;
-    glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&current_fbo);
-
-    if (current_fbo == 2) {
-      std::unordered_map <GLuint, msaa_tex_ref_s>::iterator tex_it =
-        msaa_backing_tex.begin ();
-
-      while (tex_it != msaa_backing_tex.end ()) {
-        if (! tex_it->second.dirty) {
-          ++tex_it;
-          continue;
-        }
-
-         // Deferring the resolve until first texture use was tried,
-         //   however it did not work because of the inefficient way
-         //     that the game uses SSAO color buffers.
-         PP_MSAA_ResolveTexture (tex_it->first);
-
-        ++tex_it;
-      }
-
-      std::unordered_map <GLuint, msaa_rbo_ref_s>::iterator rbo_it =
-        msaa_backing_rbo.begin ();
-
-      while (rbo_it != msaa_backing_rbo.end ()) {
-        ++rbo_it;
-      }
-    }
+    framebuffer = msaa.bindFramebuffer (target, framebuffer);
   }
 
   glBindFramebuffer_Original (target, framebuffer);
-
-
-  // Simple pass-through to handle scenarios were MSAA rasterization
-  //   is skipped.
-  if (framebuffer == msaa_resolve_fbo && msaa_resolve_fbo != 0) {
-    GLenum buffers [] = { GL_COLOR_ATTACHMENT0,
-                          GL_COLOR_ATTACHMENT0 + 1,
-                          GL_COLOR_ATTACHMENT0 + 2 };
-    glDrawBuffers (3, buffers);
-  }
 }
 
 std::wstring
@@ -642,6 +701,12 @@ PP_GL_InternalFormat_ToStr (GLenum format)
 
     case GL_RGBA16F:
       return L"RGBA      (16-bit Half-Float)";
+
+    case GL_RGB16F:
+      return L"RGB       (16-bit Half-Float)";
+
+    case GL_RGB32F:
+      return L"RGB       (32-bit Float)";
   }
 
   wchar_t wszUnknown [32];
@@ -673,62 +738,26 @@ glFramebufferRenderbuffer_Detour ( GLenum target,
                                    GLenum renderbuffertarget,
                                    GLuint renderbuffer )
 {
-  if (config.render.msaa_samples < 2)
-    return
-      glFramebufferRenderbuffer_Original ( target,
-                                             attachment,
-                                               renderbuffertarget,
-                                                 renderbuffer );
+  if (config.render.msaa_samples > 1)
+    if (msaa.attachRenderbuffer (target, attachment, renderbuffer))
+      return;
 
-  GLuint fbo;
-  glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&fbo);
+  glFramebufferRenderbuffer_Original ( target,
+                                         attachment,
+                                           renderbuffertarget,
+                                             renderbuffer );
+}
 
-  std::unordered_map <GLuint, msaa_rbo_ref_s>::iterator it =
-    msaa_backing_rbo.find (renderbuffer);
-
-  if (fbo == 2 && it != msaa_backing_rbo.end ()) {
-    if (msaa_resolve_fbo == 0)
-      glGenFramebuffers (1, &msaa_resolve_fbo);
-
-    it->second.parent_fbo = fbo;
-    it->second.color_loc  = (attachment-GL_COLOR_ATTACHMENT0) < 16 ?
-                              (attachment-GL_COLOR_ATTACHMENT0) : -1;
-    it->second.dirty      = true;
-
-    dll_log.Log ( L"[   MSAA   ] Attaching RBuffer (id=%5lu) to FBO "
-                               L"(id=%lu) via %s",
-                    it->second.rbo,
-                      fbo,
-                        PP_FBO_AttachPoint_ToStr (attachment).c_str () );
-
-    glFramebufferRenderbuffer_Original ( target,
-                                           attachment,
-                                             GL_RENDERBUFFER,
-                                               it->second.rbo );
-
-    glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, msaa_resolve_fbo);
-
-    glFramebufferRenderbuffer_Original ( target,
-                                           attachment,
-                                             renderbuffertarget,
-                                               renderbuffer );
-
-    glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, fbo);
-
-    return;
-  }
-
-  else if (it != msaa_backing_rbo.end ()) {
-    // Remove this RBO, we only want to multisample stuff attached to FBO #2
-    glDeleteRenderbuffers_Original (1, &it->second.rbo);
-    msaa_backing_rbo.erase         (it);
-  }
-
-  return
-    glFramebufferRenderbuffer_Original ( target,
-                                           attachment,
-                                             renderbuffertarget,
-                                               renderbuffer );
+__declspec (noinline)
+GLvoid
+WINAPI
+glDrawBuffers_Detour
+(
+        GLsizei n,
+  const GLenum* bufs
+)
+{
+  return glDrawBuffers_Original (n, bufs);
 }
 
 __declspec (noinline)
@@ -740,71 +769,15 @@ glFramebufferTexture2D_Detour ( GLenum target,
                                 GLuint texture, 
                                 GLint  level )
 {
-  if (config.render.msaa_samples < 2) {
-    return
-      glFramebufferTexture2D_Original ( target,
-                                          attachment,
-                                            textarget,
-                                              texture,
-                                                level );
-  }
+  if (config.render.msaa_samples > 1)
+    if (msaa.attachTexture (target, attachment, texture, textarget, level))
+      return;
 
-
-  GLuint fbo;
-  glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&fbo);
-
-  std::unordered_map <GLuint, msaa_tex_ref_s>::iterator it =
-    msaa_backing_tex.find (texture);
-
-  if (fbo == 2 && it != msaa_backing_tex.end ()) {
-    if (msaa_resolve_fbo == 0)
-      glGenFramebuffers (1, &msaa_resolve_fbo);
-
-    it->second.parent_fbo = fbo;
-    it->second.color_loc  = (attachment-GL_COLOR_ATTACHMENT0) < 16 ?
-                            (attachment-GL_COLOR_ATTACHMENT0) : -1;
-    it->second.dirty      = true;
-
-    dll_log.Log ( L"[   MSAA   ] Attaching Texture (id=%5lu) to FBO "
-                               L"(id=%lu) via %s =>"
-                               L" Proxy RBO (id=%lu, %lu-sample)",
-                    texture,
-                      fbo,
-                        PP_FBO_AttachPoint_ToStr (attachment).c_str (),
-                          it->second.rbo,
-                            config.render.msaa_samples );
-
-    glFramebufferRenderbuffer_Original ( target,
-                                           attachment,
-                                             GL_RENDERBUFFER,
-                                               it->second.rbo );
-
-    glBindFramebuffer_Original (GL_FRAMEBUFFER, msaa_resolve_fbo);
-
-    glFramebufferTexture2D_Original ( target,
-                                        attachment,
-                                          textarget,
-                                            texture,
-                                              level );
-
-    glBindFramebuffer_Original (GL_FRAMEBUFFER, fbo);
-
-    return;
-  }
-
-  else if (it != msaa_backing_tex.end ()) {
-    // Remove this RBO, we only want to multisample stuff attached to FBO #2
-    glDeleteRenderbuffers_Original (1, &it->second.rbo);
-    msaa_backing_tex.erase         (it);
-  }
-
-
-  return
-    glFramebufferTexture2D_Original ( target,
-                                        attachment,
-                                          textarget,
-                                            texture,
-                                              level );
+  glFramebufferTexture2D_Original ( target,
+                                      attachment,
+                                        textarget,
+                                          texture,
+                                            level );
 }
 
 __declspec (noinline)
@@ -818,6 +791,15 @@ glReadPixels_Detour ( GLint   x,
                       GLenum  type,
                       GLvoid* data )
 {
+  if (pp::RenderFix::tracer.log) {
+    dll_log.Log ( L"[ GL Trace ] glReadPixels (%li, %li, %li, %li, 0x%X, 0x%X, %ph) "
+                  L"[Calling Thread: tid=%x]",
+                    x,y,
+                      width,height,
+                        format,type,
+                          data,
+                            GetCurrentThreadId () );
+  }
   // This is designed to read a 10x10 region at the center
   //   of the screen. That of course only works if 720p is
   //     forced.
@@ -834,25 +816,13 @@ glReadPixels_Detour ( GLint   x,
     glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, (GLint *)&read_fbo);
     glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&draw_fbo);
 
-    if (read_fbo == 2) {
+    if (read_fbo == 2 && msaa.use) {
       GLuint read_buffer;
       glGetIntegerv (GL_READ_BUFFER, (GLint *)&read_buffer);
 
-      if (msaa.use && msaa.dirty) {
-        glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, 2);
-        glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, msaa_resolve_fbo);
+       msaa.resolveTexture (pp::RenderFix::draw_state.depth_tex);
 
-          glBlitFramebuffer_Original ( x, y,
-                                         x+width, y+height,
-                                       x, y,
-                                         x+width, y+height,
-                                       GL_DEPTH_BUFFER_BIT,
-                                         GL_NEAREST );
-
-        glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, draw_fbo);
-      }
-
-      glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, msaa_resolve_fbo);
+      glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, msaa.resolve_fbo);
       glReadBuffer               (read_buffer);
     }
   }
@@ -874,7 +844,7 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
   //   client-side detection heuristics.
   //
   if (config.render.fringe_removal) {
-    bool world  = (mode == GL_TRIANGLES && count < 180);//      && count == 6);
+    bool world  = (mode == GL_TRIANGLES);// && count < 180);//      && count == 6);
     bool sprite = (mode == GL_TRIANGLE_STRIP && count == 4);
 
      if (drawing_main_scene && (world || sprite)) {
@@ -985,22 +955,17 @@ glDeleteTextures_Detour (GLsizei n, GLuint* textures)
       ui_textures.erase (textures [i]);
     }
 
-    if (msaa_backing_tex.find (textures [i]) != msaa_backing_tex.end ()) {
-      dll_log.Log ( L"[   MSAA   ] Game deleted an MSAA backed Texture, "
-                                 L"cleaning up... (TexID=%lu, RBO=%lu)",
-                      textures [i], msaa_backing_tex [textures [i]].rbo );
-
-      glDeleteRenderbuffers_Original (1, &msaa_backing_tex [textures [i]].rbo);
-
-      msaa_backing_tex.erase (textures [i]);
-    }
+    msaa.deleteTexture (textures [i]);
 
     if (textures [i] == pp::RenderFix::draw_state.depth_tex) {
-      GLuint fbo;
-      glGetIntegerv                   (GL_FRAMEBUFFER_BINDING, (GLint *)&fbo);
-      glBindFramebuffer_Original      (GL_FRAMEBUFFER, msaa_resolve_fbo);
-      glFramebufferTexture2D_Original (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-      glBindFramebuffer_Original      (GL_FRAMEBUFFER, fbo);
+      if (config.render.msaa_samples > 1) {
+        GLuint fbo;
+        glGetIntegerv                   (GL_FRAMEBUFFER_BINDING, (GLint *)&fbo);
+        glBindFramebuffer_Original      (GL_FRAMEBUFFER, msaa.resolve_fbo);
+        glFramebufferTexture2D_Original (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+        glBindFramebuffer_Original      (GL_FRAMEBUFFER, fbo);
+      }
+
       pp::RenderFix::draw_state.depth_tex = 0;
     }
   }
@@ -1037,8 +1002,10 @@ WINAPI
 glBindTexture_Detour ( GLenum target,
                        GLuint texture )
 {
-  if (config.render.msaa_samples < 2)
-    return glBindTexture_Original (target, texture);
+  if (config.render.msaa_samples > 1) {
+    if (msaa.use)
+      msaa.resolveTexture (texture);
+  }
 
   return glBindTexture_Original (target, texture);
 }
@@ -1167,13 +1134,36 @@ glTexImage2D_Detour ( GLenum  target,
                   L"Internal Format: %s",
                     PP_GL_InternalFormat_ToStr (internalformat).c_str () );
 
-#if 0
-    // Avoid driver weirdness from using a non-color renderable format
-    if (internalformat == GL_LUMINANCE_ALPHA) {
-      internalformat = GL_RG8;
-      format         = GL_RG;
+    if (internalformat == GL_RGBA16F) {
+      render_targets.position = texId;
+
+      internalformat = config.render.high_precision_ssao ? GL_RGB32F : GL_RGB16F;
+      format         = GL_RGB;
+
+      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT );
+      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT );
     }
-#endif
+
+    // Avoid driver weirdness from using a non-color renderable format
+    else if (internalformat == GL_LUMINANCE8) {
+      internalformat = GL_R8;
+      format         = GL_RED;
+
+      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+
+      dll_log.Log ( L"[Compliance] Setting up swizzle mask (r,r,r,1) on "
+                    L"GL_R8 instead of rendering to GL_LUMINANCE8" );
+
+      GLint swizzleMeTimbers [] = { GL_RED, GL_RED, GL_RED,
+                                    GL_ONE };
+      glTexParameteriv ( GL_TEXTURE_2D,
+                           GL_TEXTURE_SWIZZLE_RGBA,
+                             swizzleMeTimbers );
+    } else {
+      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT );
+      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT );
+    }
 
 #if 0
     if (internalformat == GL_DEPTH_COMPONENT)
@@ -1190,38 +1180,17 @@ glTexImage2D_Detour ( GLenum  target,
 #endif
 
     if (width == 1280 && height == 720) {
+      pp::RenderFix::fullscreen = true;
+
       width  = config.render.scene_res_x;
       height = config.render.scene_res_y;
 
-      if (config.render.msaa_samples > 1) {
-        GLint original_rbo;
-        glGetIntegerv (GL_RENDERBUFFER_BINDING, &original_rbo);
-
-        std::unordered_map <GLuint, msaa_tex_ref_s>::iterator it =
-          msaa_backing_tex.find (texId);
-
-        if (it != msaa_backing_tex.end ()) {
-          // Renderbuffer "Orphaning" (reconfigure existing datastore)
-          glBindRenderbuffer               (GL_RENDERBUFFER, it->second.rbo);
-          glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples,
-                                                             internalformat, width, height);
-          glBindRenderbuffer               (GL_RENDERBUFFER, original_rbo);
-        } else {
-          GLuint rbo;
-          glGenRenderbuffers               (1, &rbo);
-          glBindRenderbuffer               (GL_RENDERBUFFER, rbo);
-          glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples, 
-                                                             internalformat, width, height);
-
-          msaa_tex_ref_s ref;
-          ref.rbo        = rbo;
-          ref.parent_fbo = -1; // Not attached to anything yet
-
-          msaa_backing_tex.insert (std::pair <GLuint, msaa_tex_ref_s> (texId, ref));
-
-          glBindRenderbuffer (GL_RENDERBUFFER, original_rbo);
-        }
-      }
+      if (config.render.msaa_samples > 1)
+        msaa.createTexture (texId, internalformat, width, height);
+    } else if (internalformat != GL_DEPTH_COMPONENT) {
+      // This was good in theory, but ... Steam in-home Streaming creates
+      //   additional rendertargets...
+      //pp::RenderFix::fullscreen = false;
     }
 
 #if 0
@@ -1246,7 +1215,7 @@ glTexImage2D_Detour ( GLenum  target,
                             internalformat,
                               width, height,
                                 border,
-                                  format, type,
+                                  format, type, 
                                     data );
 }
 
@@ -1259,19 +1228,7 @@ glDeleteRenderbuffers_Detour (       GLsizei n,
   // Run through the list and look for any MSAA-backed RBOs so we do not
   //   leak VRAM.
   for (int i = 0; i < n; i++) {
-    if (msaa_backing_rbo.find (renderbuffers [i]) != msaa_backing_rbo.end ()) {
-      dll_log.Log ( L"[   MSAA   ] Game deleted an MSAA backed RBuffer, "
-                                 L"cleaning up... (RBO_ss=%lu, RBO_ms=%lu)",
-                      renderbuffers [i],
-                        msaa_backing_rbo [renderbuffers [i]].rbo );
-
-      glDeleteRenderbuffers_Original (
-                  1,
-                    &msaa_backing_rbo [renderbuffers [i]].rbo
-      );
-
-      msaa_backing_rbo.erase (renderbuffers [i]);
-    }
+    msaa.deleteRenderbuffer (renderbuffers [i]);
   }
 
   return glDeleteRenderbuffers_Original (n, renderbuffers);
@@ -1303,35 +1260,7 @@ glRenderbufferStorage_Detour (
   if (width == 1280 && height == 720) {
     width = config.render.scene_res_x; height = config.render.scene_res_y;
 
-    if (config.render.msaa_samples > 1) {
-      GLuint rboId;
-      glGetIntegerv (GL_RENDERBUFFER_BINDING, (GLint *)&rboId);
-
-      std::unordered_map <GLuint, msaa_rbo_ref_s>::iterator it =
-        msaa_backing_rbo.find (rboId);
-
-      if (it != msaa_backing_rbo.end ()) {
-        // Renderbuffer "Orphaning" (reconfigure existing datastore)
-        glBindRenderbuffer               (GL_RENDERBUFFER, it->second.rbo);
-        glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples,
-                                                           internalformat, width, height);
-        glBindRenderbuffer               (GL_RENDERBUFFER, rboId);
-      } else {
-        GLuint rbo;
-        glGenRenderbuffers               (1, &rbo);
-        glBindRenderbuffer               (GL_RENDERBUFFER, rbo);
-        glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples,
-                                                           internalformat, width, height);
-
-        msaa_rbo_ref_s ref;
-        ref.rbo        = rbo;
-        ref.parent_fbo = -1;  // Not attached to anything yet
-
-        msaa_backing_rbo.insert (std::pair <GLuint, msaa_rbo_ref_s> (rboId, ref));
-
-        glBindRenderbuffer (GL_RENDERBUFFER, rboId);
-      }
-    }
+    msaa.createRenderbuffer (internalformat, width, height);
   }
 
 #if 0
@@ -1407,77 +1336,45 @@ glCopyTexSubImage2D_Detour (
                           width, height );
    }
 
-  if (width == 1280 && height == 720) {
+   bool shadow = (width == 32   && height == 32)  ||
+                 (width == 1024 && height == 512) ||
+                 (width == 2048 && height == 2048);
+
+  if (! shadow) {
+    GLuint texId;
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, (GLint *)&texId);
+
+  // This has to be done every time the window changes resolution
+  if (true) {//texId != pp::RenderFix::draw_state.depth_tex) {
+    pp::RenderFix::draw_state.depth_tex = texId;
+
+    GLuint draw_buffer;
+
+    glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
+
+    if (config.render.msaa_samples > 1)
+      glBindFramebuffer_Original    (GL_FRAMEBUFFER, msaa.resolve_fbo);
+    else
+      glBindFramebuffer_Original    (GL_FRAMEBUFFER, 2);
+
+    glFramebufferTexture2D_Original (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, texId, 0);
+
+    glBindFramebuffer_Original (GL_FRAMEBUFFER, draw_buffer);
+  }
+
     width  = config.render.scene_res_x;
     height = config.render.scene_res_y;
-
-    // This has to be done every time the window changes resolution
-    if (pp::RenderFix::draw_state.depth_tex == 0) {
-      GLuint texId;
-      glGetIntegerv (GL_TEXTURE_BINDING_2D, (GLint *)&texId);
-
-      pp::RenderFix::draw_state.depth_tex = texId;
-
-      GLuint draw_buffer;
-
-      glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
-
-      if (config.render.msaa_samples > 1)
-        glBindFramebuffer_Original    (GL_FRAMEBUFFER, msaa_resolve_fbo);
-      else
-        glBindFramebuffer_Original    (GL_FRAMEBUFFER, 2);
-
-      glFramebufferTexture2D_Original (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, texId, 0);
-
-      pp::RenderFix::draw_state.window_changed = false;
-
-      glBindFramebuffer_Original (GL_FRAMEBUFFER, draw_buffer);
-    }
 
 // For Depth of Field to Work
 #if 1
-    if (config.render.msaa_samples > 1 && msaa.use && msaa.dirty) {
-      GLuint read_buffer,
-             draw_buffer;
-
-      glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, (GLint *)&read_buffer);
-      glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
-
-      // Hard-Coding this makes me nervous, but we will cross that bridge much later
-      //   when it is burning.
-      glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, 2);
-      glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, msaa_resolve_fbo);
-
-        glBlitFramebuffer_Original ( 0, 0,
-                                       config.render.scene_res_x, config.render.scene_res_y,
-                                     0, 0,
-                                       config.render.scene_res_x, config.render.scene_res_y,
-                                     GL_DEPTH_BUFFER_BIT,
-                                       GL_NEAREST );
-
-      glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, draw_buffer);
-      glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, read_buffer);
-
-      msaa.dirty = false;
-    }
+    if (msaa.use)
+      msaa.resolveTexture (pp::RenderFix::draw_state.depth_tex);
 #endif
-  }
 
-  if (pp::RenderFix::draw_state.depth_tex != 0 && width != 32 && height != 2048)
+    // We don't need to make a copy, we attached this texture to the framebuffer
+    //   already
     return;
-
-#if 0
-  if (width == 960 && height == 544) {
-    width  = config.render.scene_res_x;
-    height = config.render.scene_res_y;
   }
-#endif
-
-#if 0
-  if (width == 1024 && height == 512) {
-    width = RES_X; height = RES_Y;
-  }
-#endif
 
   switch (HAS_ARB_COPY_IMAGE)
   {
@@ -1523,6 +1420,11 @@ GLvoid
 WINAPI
 glViewport_Detour (GLint x, GLint y, GLsizei width, GLsizei height)
 {
+  if (pp::RenderFix::tracer.log)
+    dll_log.Log ( L"[ GL Trace ] -- glViewport (%lu, %lu, %lu, %lu)",
+                    x, y,
+                      width, height );
+
   if ((width == 1280 && height == 720) /*||
       (width == 960  && height == 544)*/) {
     width  = config.render.scene_res_x;
@@ -1804,13 +1706,17 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
       (glBlitFramebuffer_pfn)
         wglGetProcAddress_Original ("glBlitFramebuffer");
 
-    glDrawBuffers =
+    glDrawBuffers_Original =
       (glDrawBuffers_pfn)
         wglGetProcAddress_Original ("glDrawBuffers");
 
     glColorMaski =
       (glColorMaski_pfn)
         wglGetProcAddress_Original ("glColorMaski");
+
+    glCheckFramebufferStatus =
+      (glCheckFramebufferStatus_pfn)
+        wglGetProcAddress_Original ("glCheckFramebufferStatus");
 
     init_self = true;
   }
@@ -1868,6 +1774,12 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     detoured                    = true;
   }
 #endif
+
+  if (! strcmp (szFuncName, "glDrawBuffers") && (ret != nullptr)) {
+    glDrawBuffers_Original = (glDrawBuffers_pfn)ret;
+    ret                    = (PROC)glDrawBuffers_Detour;
+    detoured               = true;
+  }
 
   if (! strcmp (szFuncName, "glBindFramebuffer") && (ret != nullptr)) {
     glBindFramebuffer_Original = (glBindFramebuffer_pfn)ret;
@@ -2187,6 +2099,8 @@ wglMakeCurrent_Detour ( HDC   hDC,
 
   return TRUE;
 }
+
+
 
 
 LRESULT CALLBACK Dummy_WndProc (HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -2509,16 +2423,36 @@ pp::RenderFix::CommandProcessor::CommandProcessor (void)
     SK_GetCommandProcessor ();
 
   pCommandProc->AddVariable ("Render.AllowBG",   new eTB_VarStub <bool>  (&config.render.allow_background));
+
+  high_precision_ssao =
+    new eTB_VarStub <bool> (&config.render.high_precision_ssao, this);
+
+  pCommandProc->AddVariable ("Render.HighPrecisionSSAO", high_precision_ssao);
 }
 
 bool
 pp::RenderFix::CommandProcessor::OnVarChange (eTB_Variable* var, void* val)
 {
+  if (var == high_precision_ssao) {
+    if (val != nullptr) {
+      bool PP_ChangePositionFormat (GLenum format);
+
+      if (PP_ChangePositionFormat (*(bool *)val ? GL_RGB32F : GL_RGB16F)) {
+        config.render.high_precision_ssao = *(bool *)val;
+      }
+    } else {
+      return config.render.high_precision_ssao;
+    }
+  }
+
   return true;
 }
 
 pp::RenderFix::CommandProcessor*
            pp::RenderFix::CommandProcessor::pCommProc = nullptr;
+
+eTB_VarStub <bool>*
+           pp::RenderFix::high_precision_ssao         = nullptr;
 
 HWND     pp::RenderFix::hWndDevice       = NULL;
 
@@ -2527,3 +2461,286 @@ uint32_t pp::RenderFix::width            = 0UL;
 uint32_t pp::RenderFix::height           = 0UL;
 
 HMODULE  pp::RenderFix::user32_dll       = 0;
+
+
+
+
+
+
+
+
+
+
+bool
+MSAABackend::createTexture (GLuint texId, GLenum internalformat, GLsizei width, GLsizei height)
+{
+  if (config.render.msaa_samples < 2)
+    return false;
+
+  GLint original_rbo;
+  glGetIntegerv (GL_RENDERBUFFER_BINDING, &original_rbo);
+
+  std::unordered_map <GLuint, msaa_ref_s*>::iterator it =
+    backing_textures.find (texId);
+
+  if (it != backing_textures.end ()) {
+    // Renderbuffer "Orphaning" (reconfigure existing datastore)
+    glBindRenderbuffer               (GL_RENDERBUFFER, it->second->rbo);
+    glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples,
+                                        internalformat, width, height);
+    glBindRenderbuffer               (GL_RENDERBUFFER, original_rbo);
+  } else {
+    GLuint rbo;
+    glGenRenderbuffers               (1, &rbo);
+    glBindRenderbuffer               (GL_RENDERBUFFER, rbo);
+    glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples, 
+                                        internalformat, width, height);
+
+    msaa_ref_s* pRef = new msaa_ref_s;
+    pRef->rbo        = rbo;
+    pRef->parent_fbo = -1; // Not attached to anything yet
+
+    backing_textures.insert (std::pair <GLuint, msaa_ref_s*> (texId, pRef));
+
+    glBindRenderbuffer (GL_RENDERBUFFER, original_rbo);
+  }
+
+  return true;
+}
+
+bool
+MSAABackend::deleteTexture (GLuint texId)
+{
+  if (backing_textures.find (texId) != backing_textures.end ()) {
+    dll_log.Log ( L"[   MSAA   ] Game deleted an MSAA backed Texture, "
+                  L"cleaning up... (TexID=%lu, RBO=%lu)",
+                    texId, backing_textures [texId]->rbo );
+
+    glDeleteRenderbuffers_Original (1, &backing_textures [texId]->rbo);
+
+    backing_textures.erase (texId);
+
+    return true;
+  }
+
+  return false;
+}
+
+bool
+MSAABackend::attachTexture ( GLenum target,    GLenum attachment,
+                             GLuint texture,   GLenum textarget,
+                             GLuint level )
+{
+  GLuint fbo;
+  glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&fbo);
+
+  std::unordered_map <GLuint, msaa_ref_s*>::iterator it =
+    backing_textures.find (texture);
+
+  if (fbo == 2) {// && it != backing_textures.end ()) {
+    if (resolve_fbo == 0)
+      glGenFramebuffers (1, &resolve_fbo);
+
+    if (it == backing_textures.end ()) {
+      dll_log.Log ( L"[   MSAA   ] No backing Texture exists for attachment "
+                    L"(TexId=%lu, Attachment=0x%X, Target=0x%X)",
+                      texture, attachment, target );
+      return false;
+    }
+
+    it->second->parent_fbo = fbo;
+    it->second->color_loc  = (attachment-GL_COLOR_ATTACHMENT0) < 16 ?
+                             (attachment-GL_COLOR_ATTACHMENT0) : -1;
+    it->second->dirty      = true;
+
+    dll_log.Log ( L"[   MSAA   ] Attaching Texture (id=%5lu) to FBO "
+                               L"(id=%lu) via %s =>"
+                               L" Proxy RBO (id=%lu, %lu-sample)",
+                    texture,
+                      fbo,
+                        PP_FBO_AttachPoint_ToStr (attachment).c_str (),
+                          it->second->rbo,
+                            config.render.msaa_samples );
+
+    glFramebufferRenderbuffer_Original ( target,
+                                           attachment,
+                                             GL_RENDERBUFFER,
+                                               it->second->rbo );
+
+    glBindFramebuffer_Original (GL_FRAMEBUFFER, resolve_fbo);
+
+    glFramebufferTexture2D_Original ( target,
+                                        attachment,
+                                          textarget,
+                                            texture,
+                                              level );
+
+    glBindFramebuffer_Original (GL_FRAMEBUFFER, fbo);
+
+    return true;
+  }
+
+  else if (it != backing_textures.end ()) {
+    // Remove this RBO, we only want to multisample stuff attached to FBO #2
+    glDeleteRenderbuffers_Original (1, &it->second->rbo);
+    delete it->second;
+    backing_textures.erase         (it);
+  }
+
+  return false;
+}
+
+bool
+MSAABackend::createRenderbuffer ( GLenum  internalformat,
+                                  GLsizei width, GLsizei height )
+{
+  if (config.render.msaa_samples < 2)
+    return false;
+
+  GLuint rboId;
+  glGetIntegerv (GL_RENDERBUFFER_BINDING, (GLint *)&rboId);
+
+  std::unordered_map <GLuint, msaa_ref_s*>::iterator it =
+    backing_rbos.find (rboId);
+
+  if (it != backing_rbos.end ()) {
+    // Renderbuffer "Orphaning" (reconfigure existing datastore)
+    glBindRenderbuffer               (GL_RENDERBUFFER, it->second->rbo);
+    glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples,
+                                        internalformat, width, height);
+    glBindRenderbuffer               (GL_RENDERBUFFER, rboId);
+  } else {
+    GLuint rbo;
+    glGenRenderbuffers               (1, &rbo);
+    glBindRenderbuffer               (GL_RENDERBUFFER, rbo);
+    glRenderbufferStorageMultisample (GL_RENDERBUFFER, config.render.msaa_samples,
+                                        internalformat, width, height);
+
+    msaa_ref_s* pRef = new msaa_ref_s;
+    pRef->rbo        = rbo;
+    pRef->parent_fbo = -1;  // Not attached to anything yet
+
+    backing_rbos.insert (std::pair <GLuint, msaa_ref_s*> (rboId, pRef));
+
+    glBindRenderbuffer (GL_RENDERBUFFER, rboId);
+  }
+
+  return true;
+}
+
+bool
+MSAABackend::deleteRenderbuffer (GLuint rboId)
+{
+  if (config.render.msaa_samples < 2)
+    return false;
+
+  if (backing_rbos.find (rboId) != backing_rbos.end ()) {
+    dll_log.Log ( L"[   MSAA   ] Game deleted an MSAA backed RBuffer, "
+                               L"cleaning up... (RBO_ss=%lu, RBO_ms=%lu)",
+                    rboId,
+                      backing_rbos [rboId]->rbo );
+
+    glDeleteRenderbuffers_Original (
+                1,
+                  &backing_rbos [rboId]->rbo
+    );
+
+    backing_rbos.erase (rboId);
+
+    return true;
+  }
+
+  return false;
+}
+
+bool
+MSAABackend::attachRenderbuffer (GLenum target, GLenum attachment, GLuint renderbuffer)
+{
+  GLuint fbo;
+  glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&fbo);
+
+  std::unordered_map <GLuint, msaa_ref_s*>::iterator it =
+    backing_rbos.find (renderbuffer);
+
+
+  if (fbo == 2) {//it != backing_rbos.end ()) {
+    if (resolve_fbo == 0)
+      glGenFramebuffers (1, &resolve_fbo);
+
+    if (it == backing_rbos.end ()) {
+      dll_log.Log ( L"[   MSAA   ] No backing RBuffer exists for attachment "
+                    L"(RboId=%5lu, Attachment=0x%X, Target=0x%X)",
+                      renderbuffer, attachment, target );
+      return false;
+    }
+
+    it->second->parent_fbo = fbo;
+    it->second->color_loc  = (attachment-GL_COLOR_ATTACHMENT0) < 16 ?
+                              (attachment-GL_COLOR_ATTACHMENT0) : -1;
+    it->second->dirty      = true;
+
+    dll_log.Log ( L"[   MSAA   ] Attaching RBuffer (id=%5lu) to FBO "
+                               L"(id=%lu) via %s",
+                    it->second->rbo,
+                      fbo,
+                        PP_FBO_AttachPoint_ToStr (attachment).c_str () );
+
+    glFramebufferRenderbuffer_Original ( target,
+                                           attachment,
+                                             GL_RENDERBUFFER,
+                                               it->second->rbo );
+
+    glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, resolve_fbo);
+
+    glFramebufferRenderbuffer_Original ( target,
+                                           attachment,
+                                             GL_RENDERBUFFER,
+                                               renderbuffer );
+
+    glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, fbo);
+
+    return true;
+  }
+
+  else if (it != backing_rbos.end ()) {
+    // Remove this RBO, we only want to multisample stuff attached to FBO #2
+    glDeleteRenderbuffers_Original (1, &it->second->rbo);
+    delete it->second;
+    backing_rbos.erase             (it);
+  }
+
+  return false;
+}
+
+bool
+PP_ChangePositionFormat (GLenum format)
+{
+  if (render_targets.position != GL_NONE) {
+    GLuint texId;
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, (GLint *)&texId);
+
+    glBindTexture (GL_TEXTURE_2D, render_targets.position);
+
+    GLint width, height;
+    glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &width);
+    glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+
+    if (config.render.msaa_samples > 1)
+      msaa.createTexture (render_targets.position, format, width, height);
+
+    // This will orphan the old data store after any queued frames finish
+    glTexImage2D_Detour ( GL_TEXTURE_2D,
+                            0,
+                              format,
+                                width, height,
+                                  0,
+                                    GL_RGB, GL_FLOAT,
+                                      nullptr );
+
+    glBindTexture (GL_TEXTURE_2D, texId);
+
+    return true;
+  }
+
+  return false;
+}

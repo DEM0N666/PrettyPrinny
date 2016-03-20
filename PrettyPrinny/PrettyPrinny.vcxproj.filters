@@ -60,6 +60,9 @@
     <ClInclude Include="MinHook\include\MinHook.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="display.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
@@ -110,8 +113,17 @@
     <ClCompile Include="render\textures.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="render\msaa.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="display.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Library Include="MinHook\lib\libMinHook.x86.lib" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Disgaea PC\shaders\220DC605.glsl" />
   </ItemGroup>
 </Project>

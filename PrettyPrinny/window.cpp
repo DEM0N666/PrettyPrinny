@@ -19,6 +19,7 @@
  *
 **/
 #include <Windows.h>
+#include <windowsx.h> // GET_X_LPARAM
 
 #include "window.h"
 #include "input.h"
@@ -78,6 +79,7 @@ SetWindowPos_Detour(
     _In_     int  cy,
     _In_     UINT uFlags)
 {
+  return TRUE;
 #if 0
   dll_log.Log ( L"[Window Mgr][!] SetWindowPos (...)");
 #endif
@@ -155,6 +157,12 @@ SetWindowPos_Detour(
 #endif
 }
 
+bool windowed = false;
+
+#include <dwmapi.h>
+#pragma comment (lib, "dwmapi.lib")
+
+
 LONG
 WINAPI
 SetWindowLongA_Detour (
@@ -190,7 +198,36 @@ SetWindowLongA_Detour (
               nIndex == GWL_EXSTYLE ? L"GWL_EXSTYLE" :
                                       L" GWL_STYLE ",
                       dwNewLong );
-    pp::RenderFix::draw_state.window_changed = true;
+#if 0
+    if (GWL_STYLE == 0xCF0000)
+      windowed = true;
+    else
+      windowed = false;
+
+        SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_STYLE, WS_POPUP | WS_MINIMIZEBOX);
+
+        HMONITOR hMonitor = 
+          MonitorFromWindow ( pp::RenderFix::hWndDevice,
+                              MONITOR_DEFAULTTONEAREST );
+
+        MONITORINFO mi = { 0 };
+        mi.cbSize      = sizeof (mi);
+
+        GetMonitorInfo (hMonitor, &mi);
+
+        SetWindowPos_Original ( pp::RenderFix::hWndDevice,
+                                 HWND_TOP,
+                                  mi.rcMonitor.left,
+                                  mi.rcMonitor.top,
+                                    mi.rcMonitor.right  - mi.rcMonitor.left,
+                                    mi.rcMonitor.bottom - mi.rcMonitor.top,
+                                      SWP_FRAMECHANGED | SWP_NOSENDCHANGING );
+
+        windowed = false;
+        DwmEnableMMCSS (TRUE);
+
+        return dwNewLong;
+#endif
   }
 
 // TODO: Restore this functionality
@@ -379,6 +416,34 @@ GetFocus_Detour (void)
   return GetFocus_Original ();
 }
 
+typedef VOID (WINAPI *keybd_event_pfn)(
+  _In_ BYTE      bVk,
+  _In_ BYTE      bScan,
+  _In_ DWORD     dwFlags,
+  _In_ ULONG_PTR dwExtraInfo
+);
+
+keybd_event_pfn keybd_event_Original = nullptr;
+
+VOID
+WINAPI
+keybd_event_Detour (
+  _In_ BYTE      bVk,
+  _In_ BYTE      bScan,
+  _In_ DWORD     dwFlags,
+  _In_ ULONG_PTR dwExtraInfo )
+{
+#if 0
+  if (! (dwFlags & KEYEVENTF_KEYUP)) {
+    dll_log.Log (L"[ InputFix ] Killing NISA's keyboard flood!");
+    return;
+  }
+#else
+  return;
+#endif
+
+  keybd_event_Original (bVk, bScan, dwFlags, dwExtraInfo);
+}
 
 LRESULT
 CALLBACK
@@ -483,8 +548,126 @@ DetourWindowProc ( _In_  HWND   hWnd,
   }
 #endif
 
+  // What an ugly mess, this is crazy :)
+  if (config.input.cursor_mgmt) {
+    extern bool IsControllerPluggedIn (UINT uJoyID);
+
+    struct {
+      POINTS pos      = { 0 }; // POINT (Short) - Not POINT plural ;)
+      DWORD  sampled  = 0UL;
+      bool   cursor   = true;
+
+      int    init     = false;
+      int    timer_id = 0x68992;
+    } static last_mouse;
+
+   auto ActivateCursor = [](bool changed = false)->
+    bool
+     {
+       bool was_active = last_mouse.cursor;
+
+       if (! last_mouse.cursor) {
+         while (ShowCursor (TRUE) < 0) ;
+         last_mouse.cursor = true;
+       }
+
+       if (changed)
+         last_mouse.sampled = timeGetTime ();
+
+       return (last_mouse.cursor != was_active);
+     };
+
+   auto DeactivateCursor = []()->
+    bool
+     {
+       if (! last_mouse.cursor)
+         return false;
+
+       bool was_active = last_mouse.cursor;
+
+       if (last_mouse.sampled <= timeGetTime () - config.input.cursor_timeout) {
+         while (ShowCursor (FALSE) >= 0) ;
+         last_mouse.cursor = false;
+       }
+
+       return (last_mouse.cursor != was_active);
+     };
+
+    if (! last_mouse.init) {
+      SetTimer (hWnd, last_mouse.timer_id, config.input.cursor_timeout / 2, nullptr);
+      last_mouse.init = true;
+    }
+
+    bool activation_event =
+      (uMsg == WM_MOUSEMOVE);
+
+    // Don't blindly accept that WM_MOUSEMOVE actually means the mouse moved...
+    if (activation_event) {
+      const short threshold = 2;
+
+      // Filter out small movements
+      if ( abs (last_mouse.pos.x - GET_X_LPARAM (lParam)) < threshold &&
+           abs (last_mouse.pos.y - GET_Y_LPARAM (lParam)) < threshold )
+        activation_event = false;
+
+      last_mouse.pos = MAKEPOINTS (lParam);
+    }
+
+    // We cannot use WM_KEYDOWN as a condition, because the game is constantly
+    //   flooding the message pump with this message !!!
+    if (config.input.activate_on_kbd)
+      activation_event |= ( uMsg == WM_CHAR       ||
+                            uMsg == WM_SYSKEYDOWN ||
+                            uMsg == WM_SYSKEYUP );
+
+    if (activation_event)
+      ActivateCursor (true);
+
+    else if (uMsg == WM_TIMER && wParam == last_mouse.timer_id) {
+      if (IsControllerPluggedIn (config.input.gamepad_slot))
+        DeactivateCursor ();
+
+      else
+        ActivateCursor ();
+    }
+  }
+
+#if 0
+  // The game can process WM_CHAR, rather than these events that
+  //   fire at a ridiculous rate...
+  if (uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST && uMsg != WM_CHAR)
+    return 0;
+#endif
+
+  //
+  // This isn't much better than what NISA was already doing
+  //   with their keybd_event spam.
+  //
+  if (config.input.alias_wasd && (uMsg == WM_KEYDOWN || uMsg == WM_KEYUP))
+  {
+    DWORD dwFlags = (uMsg == WM_KEYUP ? KEYEVENTF_KEYUP :
+                                        0UL);
+    switch (wParam)
+    {
+      case VK_UP:
+        keybd_event_Original ('W', 0, dwFlags, (ULONG_PTR)nullptr);
+        break;
+      case VK_DOWN:
+        keybd_event_Original ('S', 0, dwFlags, (ULONG_PTR)nullptr);
+        break;
+      case VK_LEFT:
+        keybd_event_Original ('A', 0, dwFlags, (ULONG_PTR)nullptr);
+        break;
+      case VK_RIGHT:
+        keybd_event_Original ('D', 0, dwFlags, (ULONG_PTR)nullptr);
+        break;
+    }
+  }
+
   return CallWindowProc (pp::window.WndProc_Original, hWnd, uMsg, wParam, lParam);
 }
+
+
 
 
 
@@ -500,11 +683,17 @@ pp::WindowManager::Init (void)
                           SetWindowLongA_Detour,
                 (LPVOID*)&SetWindowLongA_Original );
 
+  PPrinny_CreateDLLHook ( L"user32.dll", "keybd_event",
+                          keybd_event_Detour,
+                (LPVOID*)&keybd_event_Original );
+
 #if 0
   PPrinny_CreateDLLHook ( L"user32.dll", "SetWindowPos",
                           SetWindowPos_Detour,
                 (LPVOID*)&SetWindowPos_Original );
+#endif
 
+#if 0
  PPrinny_CreateDLLHook ( L"user32.dll", "MoveWindow",
                          MoveWindow_Detour,
                (LPVOID*)&MoveWindow_Original );

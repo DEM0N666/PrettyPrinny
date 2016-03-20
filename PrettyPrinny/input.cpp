@@ -585,6 +585,28 @@ joyGetNumDevs_Detour (void)
   //return joyGetNumDevs_Original ();
 }
 
+bool
+IsControllerPluggedIn (UINT uJoyID)
+{
+  if (uJoyID == (UINT)-1)
+    return true;
+
+  XINPUT_STATE xstate;
+
+  static DWORD last_poll = timeGetTime ();
+  static DWORD dwRet     = XInputGetState (uJoyID, &xstate);
+
+  // This function is actually a performance hazzard when no controllers
+  //   are plugged in, so ... throttle the sucker.
+  if (last_poll < timeGetTime () - 500UL)
+    dwRet = XInputGetState (uJoyID, &xstate);
+
+  if (dwRet == ERROR_DEVICE_NOT_CONNECTED)
+    return false;
+
+  return true;
+}
+
 __declspec (noinline)
 MMRESULT
 WINAPI
@@ -694,10 +716,6 @@ typedef UINT (WINAPI *GetRawInputData_pfn)(
   _In_      UINT      cbSizeHeader
 );
 
-typedef SHORT (WINAPI *GetAsyncKeyState_pfn)(
-  _In_ int vKey
-);
-
 typedef BOOL (WINAPI *GetCursorInfo_pfn)(
   _Inout_ PCURSORINFO pci
 );
@@ -705,6 +723,7 @@ typedef BOOL (WINAPI *GetCursorInfo_pfn)(
 typedef BOOL (WINAPI *GetCursorPos_pfn)(
   _Out_ LPPOINT lpPoint
 );
+
 GetAsyncKeyState_pfn GetAsyncKeyState_Original = nullptr;
 GetRawInputData_pfn  GetRawInputData_Original  = nullptr;
 
@@ -857,6 +876,7 @@ GetCursorPos_Detour (LPPOINT lpPoint)
 void
 HookRawInput (void)
 {
+#if 0
   // Defer installation of this hook until DirectInput8 is setup
   if (GetRawInputData_Original == nullptr) {
     dll_log.LogEx (true, L"[   Input  ] Installing Deferred Hook: \"GetRawInputData (...)\"... ");
@@ -866,6 +886,7 @@ HookRawInput (void)
                     (LPVOID*)&GetRawInputData_Original );
    dll_log.LogEx (false, L"%hs\n", MH_StatusToString (status));
   }
+#endif
 }
 
 
@@ -923,13 +944,13 @@ pp::InputManager::Init (void)
 #endif
 
 
+  HMODULE hModXInput13 = LoadLibraryW (L"XInput1_3.dll");
+
+  XInputGetState =
+    (XInputGetState_pfn)
+      GetProcAddress (hModXInput13, "XInputGetState");
+
   if (config.input.wrap_xinput) {
-    HMODULE hModXInput13 = LoadLibraryW (L"XInput1_3.dll");
-
-    XInputGetState =
-      (XInputGetState_pfn)
-        GetProcAddress (hModXInput13, "XInputGetState");
-
     //
     // MMSystem Input Hooks
     //
@@ -1147,7 +1168,7 @@ LRESULT
 CALLBACK
 pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
 {
-  if (nCode >= 0) {
+  if (nCode == 0 /*nCode >= 0 && (nCode != HC_NOREMOVE)*/) {
     BYTE    vkCode   = LOWORD (wParam) & 0xFF;
     BYTE    scanCode = HIWORD (lParam) & 0x7F;
     SHORT   repeated = LOWORD (lParam);
@@ -1241,7 +1262,11 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
       keys_ [vkCode] = 0x81;
 
       if (keys_ [VK_CONTROL] && keys_ [VK_SHIFT]) {
-        if (keys_ [VK_TAB] && new_press) {
+        if ( keys_ [VK_TAB]         && 
+               ( vkCode == VK_CONTROL ||
+                 vkCode == VK_SHIFT   ||
+                 vkCode == VK_TAB ) &&
+             new_press ) {
           visible = ! visible;
 
           // Avoid duplicating a BMF feature
@@ -1270,6 +1295,10 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
           pCommandProc->ProcessCommandLine ("Render.AllowBG toggle");
         }
 #endif
+        else if (vkCode == 'H' && new_press) {
+          pCommandProc->ProcessCommandLine ("Render.HighPrecisionSSAO toggle");
+        }
+
         else if (vkCode == VK_OEM_COMMA && new_press) {
           pCommandProc->ProcessCommandLine ("Render.MSAA toggle");
         }

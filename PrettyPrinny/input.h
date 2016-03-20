@@ -23,6 +23,12 @@
 
 #include "command.h"
 
+typedef SHORT (WINAPI *GetAsyncKeyState_pfn)(
+  _In_ int vKey
+);
+
+extern GetAsyncKeyState_pfn GetAsyncKeyState_Original;
+
 namespace pp
 {
   namespace InputManager
@@ -69,7 +75,7 @@ namespace pp
       bool isVisible (void) { return visible; }
 
       void consumeKey (SHORT virtKey) {
-        GetAsyncKeyState (virtKey);
+        GetAsyncKeyState_Original (virtKey);
         keys_ [virtKey & 0xff] = 0x01;
         SetKeyboardState (keys_);
       }

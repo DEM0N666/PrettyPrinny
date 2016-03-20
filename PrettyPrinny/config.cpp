@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.3.0";
+std::wstring PPRINNY_VER_STR = L"0.4.0";
 pp_config_s config;
 
 struct {
@@ -37,6 +37,7 @@ struct {
   pp::ParameterInt*     scene_res_y;
   pp::ParameterInt*     swap_interval;
   pp::ParameterBool*    fringe_removal;
+  pp::ParameterBool*    high_precision_ssao;
 } render;
 
 struct {
@@ -54,6 +55,13 @@ struct {
   pp::ParameterInt*     x_offset;
   pp::ParameterInt*     y_offset;
 } window;
+
+struct {
+  pp::ParameterInt*     width;
+  pp::ParameterInt*     height;
+  pp::ParameterInt*     refresh;
+  pp::ParameterInt*     monitor;
+} display;
 
 struct {
   pp::ParameterFloat*   tolerance;
@@ -76,6 +84,11 @@ struct {
   pp::ParameterBool*    block_all_keys;
 
   pp::ParameterBool*    wrap_xinput;
+  pp::ParameterBool*    manage_cursor;
+  pp::ParameterFloat*   cursor_timeout;
+  pp::ParameterInt*     gamepad_slot;
+  pp::ParameterBool*    activate_on_kbd;
+  pp::ParameterBool*    alias_wasd;
 } input;
 
 struct {
@@ -177,6 +190,16 @@ PPrinny_LoadConfig (std::wstring name) {
     dll_ini,
       L"PrettyPrinny.Render",
         L"RemoveFringing" );
+
+  render.high_precision_ssao = 
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Enhance position precision for SSAO")
+      );
+  render.high_precision_ssao->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Render",
+        L"HighPrecisionSSAO" );
 
   //render.adaptive =
     //static_cast <pp::ParameterBool *>
@@ -293,6 +316,47 @@ PPrinny_LoadConfig (std::wstring name) {
         L"YOffset" );
 
 
+  display.width =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Display Width")
+      );
+  display.width->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Display",
+        L"Width" );
+
+  display.height =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Display Height")
+      );
+  display.height->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Display",
+        L"Height" );
+
+  display.refresh =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Display Refresh")
+      );
+  display.refresh->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Display",
+        L"Refresh" );
+
+  display.monitor =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Display Output Monitor")
+      );
+  display.monitor->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Display",
+        L"Monitor" );
+
+
   stutter.tolerance =
     static_cast <pp::ParameterFloat *>
       (g_ParameterFactory.create_parameter <float> (
@@ -378,17 +442,66 @@ PPrinny_LoadConfig (std::wstring name) {
       L"PrettyPrinny.Input",
         L"BlockAllKeys" );
 
-#if 0
   input.wrap_xinput = 
     static_cast <pp::ParameterBool *>
       (g_ParameterFactory.create_parameter <bool> (
-        L"Wrap XInput around MMsystem")
+        L"Wrap (Adapt?) XInput around MMsystem")
       );
   input.wrap_xinput->register_to_ini (
     dll_ini,
       L"PrettyPrinny.Input",
         L"WrapXInput" );
-#endif
+
+  input.manage_cursor = 
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Hide the mouse cursor after a period of inactivity")
+      );
+  input.manage_cursor->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Input",
+        L"ManageCursor" );
+
+  input.cursor_timeout = 
+    static_cast <pp::ParameterFloat *>
+      (g_ParameterFactory.create_parameter <float> (
+        L"Hide the mouse cursor after a period of inactivity")
+      );
+  input.cursor_timeout->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Input",
+        L"CursorTimeout" );
+
+  input.gamepad_slot =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Gamepad slot to test during cursor mgmt")
+      );
+  input.gamepad_slot->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Input",
+        L"GamepadSlot" );
+
+  input.activate_on_kbd =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Keyboard activates mouse cursor")
+      );
+  input.activate_on_kbd->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Input",
+        L"KeysActivateCursor" );
+
+  input.alias_wasd =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Arrow keys alias to WASD")
+      );
+  input.alias_wasd->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Input",
+        L"AliasArrowsToWASD" );
+
 
   sys.version =
     static_cast <pp::ParameterStringW *>
@@ -437,6 +550,9 @@ PPrinny_LoadConfig (std::wstring name) {
 
   if (render.fringe_removal->load ())
     config.render.fringe_removal = render.fringe_removal->get_value ();
+
+  if (render.high_precision_ssao->load ())
+    config.render.high_precision_ssao = render.high_precision_ssao->get_value ();
 
   //if (render.adaptive->load ())
     //config.render.adaptive = render.adaptive->get_value ();
@@ -529,8 +645,45 @@ PPrinny_LoadConfig (std::wstring name) {
   //if (input.block_all_keys->load ())
     //config.input.block_all_keys = input.block_all_keys->get_value ();
 
-/////  if (input.wrap_xinput->load ())
-/////    config.input.wrap_xinput = input.wrap_xinput->get_value ();
+  if (input.wrap_xinput->load ())
+    config.input.wrap_xinput = input.wrap_xinput->get_value ();
+
+  if (input.manage_cursor->load ())
+    config.input.cursor_mgmt = input.manage_cursor->get_value ();
+
+  if (input.cursor_timeout->load ())
+    config.input.cursor_timeout = input.cursor_timeout->get_value () * 1000UL;
+
+  if (input.gamepad_slot->load ())
+    config.input.gamepad_slot = input.gamepad_slot->get_value ();
+
+  if (input.activate_on_kbd->load ())
+    config.input.activate_on_kbd = input.activate_on_kbd->get_value ();
+
+  if (input.alias_wasd->load ())
+    config.input.alias_wasd = input.alias_wasd->get_value ();
+
+
+  if (display.width->load ())
+    config.display.width = display.width->get_value ();
+
+  if (display.height->load ())
+    config.display.height = display.height->get_value ();
+
+  if (display.refresh->load ())
+    config.display.refresh = display.refresh->get_value ();
+
+  if (display.monitor->load ())
+    config.display.monitor = display.monitor->get_value ();
+
+  // Derived config value, not actually stored...
+  if ( config.display.width   == 0 &&
+       config.display.height  == 0 &&
+       config.display.refresh == 0 )
+    config.display.match_desktop = true;
+  else
+    config.display.match_desktop = false;
+
 
   if (sys.version->load ())
     config.system.version = sys.version->get_value ();
@@ -549,28 +702,31 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   //render.allow_background->set_value  (config.render.allow_background);
   //render.allow_background->store      ();
 
-  render.msaa_samples->set_value      (config.render.msaa_samples);
-  render.msaa_samples->store          ();
+  render.msaa_samples->set_value       (config.render.msaa_samples);
+  render.msaa_samples->store           ();
 
 #if 0
-  render.msaa_quality->set_value      (config.render.msaa_quality);
-  render.msaa_quality->store          ();
+  render.msaa_quality->set_value       (config.render.msaa_quality);
+  render.msaa_quality->store           ();
 
-  render.refresh_rate->set_value      (config.render.refresh_rate);
-  render.refresh_rate->store          ();
+  render.refresh_rate->set_value       (config.render.refresh_rate);
+  render.refresh_rate->store           ();
 #endif
 
-  render.scene_res_x->set_value        (config.render.scene_res_x);
-  render.scene_res_x->store            ();
+  render.scene_res_x->set_value         (config.render.scene_res_x);
+  render.scene_res_x->store             ();
 
-  render.scene_res_y->set_value        (config.render.scene_res_y);
-  render.scene_res_y->store            ();
+  render.scene_res_y->set_value         (config.render.scene_res_y);
+  render.scene_res_y->store             ();
 
-  render.swap_interval->set_value      (config.render.swap_interval);
-  render.swap_interval->store          ();
+  render.swap_interval->set_value       (config.render.swap_interval);
+  render.swap_interval->store           ();
 
-  render.fringe_removal->set_value     (config.render.fringe_removal);
-  render.fringe_removal->store         ();
+  render.fringe_removal->set_value      (config.render.fringe_removal);
+  render.fringe_removal->store          ();
+
+  render.high_precision_ssao->set_value (config.render.high_precision_ssao);
+  render.high_precision_ssao->store     ();
 
   //render.adaptive->set_value          (config.render.adaptive);
   //render.adaptive->store              ();
@@ -637,8 +793,40 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   //input.block_all_keys->set_value  (config.input.block_all_keys);
   //input.block_all_keys->store      ();
 
-/////  input.wrap_xinput->set_value      (config.input.wrap_xinput);
-/////  input.wrap_xinput->store          ();
+  input.wrap_xinput->set_value      (config.input.wrap_xinput);
+  input.wrap_xinput->store          ();
+
+  input.manage_cursor->set_value    (config.input.cursor_mgmt);
+  input.manage_cursor->store        ();
+
+  input.cursor_timeout->set_value   ( (float)config.input.cursor_timeout /
+                                      1000.0f );
+  input.cursor_timeout->store       ();
+
+  input.gamepad_slot->set_value     (config.input.gamepad_slot);
+  input.gamepad_slot->store         ();
+
+  input.activate_on_kbd->set_value  (config.input.activate_on_kbd);
+  input.activate_on_kbd->store      ();
+
+  input.alias_wasd->set_value       (config.input.alias_wasd);
+  input.alias_wasd->store           ();
+
+
+  display.width->set_value          (config.display.width);
+  display.width->store              ();
+
+  display.height->set_value         (config.display.height);
+  display.height->store             ();
+
+  display.refresh->set_value        (config.display.refresh);
+  display.refresh->store            ();
+
+  // Not production ready
+/*
+  display.monitor->set_value        (config.display.monitor);
+  display.monitor->store            ();
+*/
 
   sys.version->set_value  (PPRINNY_VER_STR);
   sys.version->store      ();

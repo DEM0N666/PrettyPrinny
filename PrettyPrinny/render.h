@@ -41,7 +41,6 @@ namespace pp
       bool         use_msaa       = true;  // Allow MSAA toggle via console
                                            //  without changing the swapchain.
       bool         fullscreen     = false;
-      bool         window_changed = false;
 
       uint32_t     depth_tex      = 0; // Avoid costly copy operations by attaching
                                        //   this directly to the primary framebuffer.
@@ -75,13 +74,15 @@ namespace pp
       static CommandProcessor* pCommProc;
     };
 
-    extern HWND               hWndDevice;
+    extern HWND                hWndDevice;
 
-    extern uint32_t           width;
-    extern uint32_t           height;
-    extern bool               fullscreen;
+    extern uint32_t            width;
+    extern uint32_t            height;
+    extern bool                fullscreen;
 
-    extern HMODULE            user32_dll;
+    extern HMODULE             user32_dll;
+
+    extern eTB_VarStub <bool>* high_precision_ssao;
   }
 }
 

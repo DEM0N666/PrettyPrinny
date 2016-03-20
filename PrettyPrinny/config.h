@@ -41,7 +41,17 @@ struct pp_config_s
 
     bool     fringe_removal      = true;
     bool     conservative_msaa   = true;
+
+    bool     high_precision_ssao = false;
   } render;
+
+  struct {
+    bool     match_desktop       = true; // Implied by options below
+    int      width               = 0;    //   (all 0 = match)
+    int      height              = 0;
+    int      refresh             = 0;
+    int      monitor             = 0;
+  } display;
 
   struct {
     bool     bypass_intel_gl     = true;
@@ -101,6 +111,12 @@ struct pp_config_s
     bool block_left_ctrl = false;
     bool block_windows   = false;
     bool block_all_keys  = false;
+
+    bool cursor_mgmt     = true;
+    int  cursor_timeout  = 1500;
+    bool activate_on_kbd = true;
+    bool alias_wasd      = true;
+    int  gamepad_slot    = 0;
   } input;
 
   struct {

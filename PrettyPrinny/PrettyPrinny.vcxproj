@@ -163,6 +163,7 @@
   <ItemGroup>
     <ClInclude Include="command.h" />
     <ClInclude Include="config.h" />
+    <ClInclude Include="display.h" />
     <ClInclude Include="hook.h" />
     <ClInclude Include="ini.h" />
     <ClInclude Include="input.h" />
@@ -202,13 +203,18 @@
     <ClCompile Include="parameter.cpp" />
     <ClCompile Include="PrettyPrinny.cpp" />
     <ClCompile Include="render.cpp" />
+    <ClCompile Include="render\msaa.cpp" />
     <ClCompile Include="render\textures.cpp" />
+    <ClCompile Include="display.cpp" />
     <ClCompile Include="stdafx.cpp" />
     <ClCompile Include="timing.cpp" />
     <ClCompile Include="window.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Library Include="MinHook\lib\libMinHook.x86.lib" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Disgaea PC\shaders\220DC605.glsl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
