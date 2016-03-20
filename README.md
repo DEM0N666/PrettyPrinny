@@ -3,21 +3,21 @@ Pretty Prinny is an effort to polish Disgaea PC back to the quality standards of
 
 ## FAQ
 ### How do I install this?
-Unzip it and copy it to your Disgaea PC folder. You can find your Disgaea PC folder at %PROGRAMFILES%\Steam\steamapps\common
+Unzip it and copy it to your Disgaea PC folder. You can find your Disgaea PC folder at `%PROGRAMFILES%\Steam\steamapps\common`
 
-If you are NOT using a Steam controller, delete the Pad.cfg file.
+If you are NOT using a Steam controller, delete the `Pad.cfg` file.
 
 ### How do I uninstall this?
 Run "UninstallPrettyPrinny.bat"
 
 ### After installing this, my controller no longer works properly.
-Go into PrettyPrinny.ini and change the key "WrapXInput" which is located in the "[PrettyPrinny.Input]" section to the value "false". Your controller should work again.
+Go into `PrettyPrinny.ini` and change the key **WrapXInput**, which is located in the `[PrettyPrinny.Input]` section to **"false"**. Your controller should work again.
 
 ### I get a lot of black artifacting while in the game.
-PrettyPrinny was tested using nVidia 361.75 drivers. If you are running any other drivers than that, please change to this driver version. Other driver versions are currently under testing.
+PrettyPrinny was tested using nVidia **361.75** drivers. If you are running any other drivers than that, please change to this driver version. Other driver versions are currently under testing.
 
-### How can I be sure it's working?
-You'll get a PSN trophy sound on achievement unlock. You can force this sound to occur by pressing CTRL + SHIFT + T.
+### How can I be sure it is working?
+You'll get a PSN trophy sound on achievement unlock. You can force this sound to occur by pressing  <kbd>CTRL</kbd> + <kbd>SHIFT</kbd> + <kbd>T</kbd>.
 
 
 ## Configuration
