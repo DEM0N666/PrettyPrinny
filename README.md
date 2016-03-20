@@ -1,7 +1,7 @@
 # PrettyPrinny
 Pretty Prinny is an effort to polish Disgaea PC back to the quality standards of the original console release. It draws on my extensive experience in OpenGL to fix some underlying problems that prevent the game from running at proper performance or image quality standards. Additionally, it touches on general usability issues such as input, and includes features that will make modding easier on the community.
 
-## FAQ
+## Mini-FAQ <sup>(See the [Steam Guide](https://steamcommunity.com/sharedfiles/filedetails/?id=641932497) for full documentation)</sup>
 ### How do I install this?
 Unzip it and copy it to your Disgaea PC folder. You can find your Disgaea PC folder at `%PROGRAMFILES%\Steam\steamapps\common`
 
