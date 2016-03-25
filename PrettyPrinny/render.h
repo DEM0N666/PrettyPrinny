@@ -131,10 +131,91 @@ typedef HGLRC (WINAPI *wglCreateContext_pfn)(
   HDC hDC
 );
 
-typedef PROC (APIENTRY *wglGetProcAddress_pfn)(
+typedef PROC (WINAPI *wglGetProcAddress_pfn)(
   LPCSTR szFuncName
 );
 
+extern wglGetProcAddress_pfn wglGetProcAddress_Log;
+
+#define WGL_CONTEXT_MAJOR_VERSION_ARB             0x2091
+#define WGL_CONTEXT_MINOR_VERSION_ARB             0x2092
+#define WGL_CONTEXT_FLAGS_ARB                     0x2094
+#define WGL_CONTEXT_PROFILE_MASK_ARB              0x9126
+
+#define WGL_CONTEXT_DEBUG_BIT_ARB                 0x0001
+#define WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB    0x0002
+
+#define WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB 0x0002
+
+
+
+
+typedef GLvoid (WINAPI *glGenerateMipmap_pfn)(
+  GLenum target
+);
+
+typedef GLvoid (WINAPI *glDepthMask_pfn)(
+  GLboolean flag
+);
+
+typedef GLvoid (WINAPI *glBindRenderbuffer_pfn)(
+  GLenum target,
+  GLuint renderbuffer
+);
+
+typedef GLvoid (WINAPI *glGenRenderbuffers_pfn)(
+  GLsizei  n, 
+  GLuint  *renderbuffers
+);
+
+typedef GLvoid (WINAPI *glDeleteRenderbuffers_pfn)(
+        GLsizei  n,
+  const GLuint  *renderbuffers
+);
+
+typedef GLvoid (WINAPI *glBindTexture_pfn)(
+  GLenum target,
+  GLuint texture
+);
+
+typedef GLvoid (WINAPI *glFramebufferTexture2D_pfn)(
+  GLenum target,
+  GLenum attachment,
+  GLenum textarget,
+  GLuint texture,
+  GLint level
+);
+
+typedef GLvoid (WINAPI *glFramebufferRenderbuffer_pfn)(
+  GLenum target,
+  GLenum attachment,
+  GLenum renderbuffertarget,
+  GLuint renderbuffer
+);
+
+typedef GLvoid (WINAPI *glGenFramebuffers_pfn)(
+  GLsizei  n,
+  GLuint  *framebuffers
+);
+
+typedef GLenum (WINAPI *glCheckFramebufferStatus_pfn)(
+  GLenum target
+);
+
+typedef GLvoid (WINAPI *glReadPixels_pfn)(
+  GLint   x,
+  GLint   y,
+  GLsizei width,
+  GLsizei height,
+  GLenum  format,
+  GLenum  type,
+  GLvoid* data
+);
+
+typedef GLvoid (WINAPI *glDrawBuffers_pfn)(
+        GLsizei n,
+  const GLenum* bufs
+);
 
 typedef GLvoid (WINAPI *glUseProgram_pfn)(
   GLuint program
@@ -343,6 +424,11 @@ typedef GLvoid (WINAPI *glShaderSource_pfn)(
  const   GLint    *length
 );
 
+typedef GLvoid (WINAPI *glAttachShader_pfn)(
+  GLuint program,
+  GLuint shader
+);
+
 typedef GLvoid (WINAPI *glFinish_pfn)(
   void
 );
@@ -367,5 +453,50 @@ typedef GLvoid (WINAPI *glScalef_pfn)(
   GLfloat y,
   GLfloat z
 );
+
+#define GL_MULTISAMPLE                    0x809D
+
+#define GL_FRAMEBUFFER_BINDING            0x8CA6
+#define GL_DRAW_FRAMEBUFFER_BINDING       0x8CA6
+#define GL_READ_FRAMEBUFFER_BINDING       0x8CAA
+
+#define GL_FRAMEBUFFER_COMPLETE           0x8CD5
+
+#define GL_RENDERBUFFER_BINDING           0x8CA7
+#define GL_RENDERBUFFER                   0x8D41
+
+#define GL_READ_FRAMEBUFFER               0x8CA8
+#define GL_DRAW_FRAMEBUFFER               0x8CA9
+#define GL_FRAMEBUFFER                    0x8D40
+
+#define GL_DRAW_BUFFER0                   0x8825
+
+#define GL_COLOR_ATTACHMENT0              0x8CE0
+#define GL_DEPTH_ATTACHMENT               0x8D00
+
+#define GL_DEPTH_COMPONENT24              0x81A6
+#define GL_RG                             0x8227
+#define GL_R8                             0x8229
+#define GL_RG8                            0x8051
+#define GL_RGBA8                          0x8058
+#define GL_R16F                           0x822D
+#define GL_RG16F                          0x822F
+#define GL_RGB16F                         0x881B
+#define GL_RGBA16F                        0x881A
+#define GL_RGB32F                         0x8815
+
+#define GL_R11F_G11F_B10F                 0x8C3A
+#define GL_RGB10_A2                       0x8059
+
+#define GL_CLAMP_TO_EDGE                  0x812F
+#define GL_MIRRORED_REPEAT                0x8370
+
+#define GL_TEXTURE_SWIZZLE_RGBA           0x8E46
+
+#define GL_COLOR_MATRIX_SGI               0x80B1
+
+#define GL_SHADER_TYPE                    0x8B4F
+#define GL_FRAGMENT_SHADER                0x8B30
+#define GL_VERTEX_SHADER                  0x8B31
 
 #endif /* __PPRINNY__RENDER_H__ */

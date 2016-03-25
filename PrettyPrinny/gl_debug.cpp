@@ -11,6 +11,12 @@ typedef GLvoid (APIENTRY *GLDEBUGPROC)(GLenum source,GLenum type,GLuint id,GLenu
 #define GL_DEBUG_TYPE_ERROR                                     0x824C
 #define GL_DEBUG_SEVERITY_HIGH                                  0x9146
 
+#define GL_DEBUG_TYPE_MARKER                                    0x8268
+#define GL_DEBUG_TYPE_PUSH_GROUP                                0x8269
+#define GL_DEBUG_TYPE_POP_GROUP                                 0x826A
+
+#define GL_DEBUG_SEVERITY_NOTIFICATION                          0x826B
+
 const char*
 PP_GL_DEBUG_SOURCE_STR (GLenum source)
 {
@@ -21,7 +27,7 @@ PP_GL_DEBUG_SOURCE_STR (GLenum source)
 
   int str_idx =
     min ( source - GL_DEBUG_SOURCE_API,
-            sizeof (sources) / sizeof (const char *) );
+            sizeof (sources) / sizeof (const char *) - 1 );
 
   return sources [str_idx];
 }
@@ -36,9 +42,21 @@ PP_GL_DEBUG_TYPE_STR (GLenum type)
 
   int str_idx =
     min ( type - GL_DEBUG_TYPE_ERROR,
-            sizeof (types) / sizeof (const char *) );
+            sizeof (types) / sizeof (const char *) - 1 );
 
-  return types [str_idx];
+  if (type < GL_DEBUG_TYPE_MARKER)
+    return types [str_idx];
+
+  // This is a new type, not in the original extension spec.
+  static const char* new_types [] = {
+   "Marker", "Push Group", "Pop Group", "Unknown"
+  };
+
+  str_idx =
+    min ( type - GL_DEBUG_TYPE_MARKER,
+            sizeof (new_types) / sizeof (const char *) - 1 );
+
+  return new_types [str_idx];
 }
 
 const char*
@@ -50,9 +68,13 @@ PP_GL_DEBUG_SEVERITY_STR (GLenum severity)
 
   int str_idx =
     min ( severity - GL_DEBUG_SEVERITY_HIGH,
-            sizeof (severities) / sizeof (const char *) );
+            sizeof (severities) / sizeof (const char *) - 1 );
 
-  return severities [str_idx];
+  if (severity != GL_DEBUG_SEVERITY_NOTIFICATION)
+    return severities [str_idx];
+
+  // This is a new severity level not in the original extension spec.
+  return "Notification";
 }
 
 GLvoid
@@ -70,7 +92,7 @@ PP_GL_ERROR_CALLBACK (GLenum        source,
   dll_log.Log (L"[ GL Debug ] OpenGL Error:");
   dll_log.Log (L"[ GL Debug ] =============");
 
-  dll_log.Log (L"[ GL Debug ]  Object ID: %d", id);
+  dll_log.Log (L"[ GL Debug ]  Error ID:  0x%X", id);
 
   dll_log.Log (L"[ GL Debug ]  Severity:  %hs",
                  PP_GL_DEBUG_SEVERITY_STR (severity));

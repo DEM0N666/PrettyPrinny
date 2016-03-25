@@ -29,7 +29,7 @@ extern std::wstring PPRINNY_VER_STR;
 struct pp_config_s
 {
   struct {  
-    bool     allow_background    = true;
+    bool     allow_background    = false;//true;
     int      msaa_samples        = 0;
     int      msaa_quality        = 0;
     int      refresh_rate        = 0;
@@ -59,6 +59,7 @@ struct pp_config_s
     bool     optimize_ctx_mgmt   = true;
     bool     debug_mode          = false;
     bool     support_old_drivers = false;
+    bool     patch_damage_bug    = true;
   } compatibility;
 
   struct {
@@ -93,6 +94,9 @@ struct pp_config_s
     //int      max_anisotropy   = 4;
     bool     dump             = false;
     bool     log              = false;
+    bool     force_mipmaps    = false;
+    int      pixelate         = 0;
+    bool     caching          = false;
   } textures;
 
   struct {

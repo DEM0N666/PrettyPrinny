@@ -191,20 +191,24 @@ SetWindowLongA_Detour (
                             (LONG_PTR)DetourWindowProc );
   }
 
-
   if (nIndex == GWL_EXSTYLE || nIndex == GWL_STYLE) {
     dll_log.Log ( L"[Window Mgr] SetWindowLongA (0x%06X, %s, 0x%06X)",
                     hWnd,
               nIndex == GWL_EXSTYLE ? L"GWL_EXSTYLE" :
                                       L" GWL_STYLE ",
                       dwNewLong );
-#if 0
+    //if (nIndex == GWL_STYLE)
+      //dwNewLong = WS_POPUP | WS_MINIMIZEBOX;
+    //if (nIndex == GWL_EXSTYLE)
+      //dwNewLong = WS_EX_APPWINDOW;
+
     if (GWL_STYLE == 0xCF0000)
       windowed = true;
     else
       windowed = false;
 
-        SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_STYLE, WS_POPUP | WS_MINIMIZEBOX);
+    SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_STYLE,   WS_POPUP | WS_MINIMIZEBOX);
+    SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_EXSTYLE, WS_EX_APPWINDOW);
 
         HMONITOR hMonitor = 
           MonitorFromWindow ( pp::RenderFix::hWndDevice,
@@ -215,7 +219,7 @@ SetWindowLongA_Detour (
 
         GetMonitorInfo (hMonitor, &mi);
 
-        SetWindowPos_Original ( pp::RenderFix::hWndDevice,
+        SetWindowPos/*_Original*/ ( pp::RenderFix::hWndDevice,
                                  HWND_TOP,
                                   mi.rcMonitor.left,
                                   mi.rcMonitor.top,
@@ -226,8 +230,7 @@ SetWindowLongA_Detour (
         windowed = false;
         DwmEnableMMCSS (TRUE);
 
-        return dwNewLong;
-#endif
+    return dwNewLong;
   }
 
 // TODO: Restore this functionality

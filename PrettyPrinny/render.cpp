@@ -27,7 +27,15 @@
 #include "timing.h"
 #include "hook.h"
 
+#include "render/gl_perf.h"
+
 #include <cstdint>
+
+//
+// Optimizations that may turn out to break stuff
+//
+bool aggressive_optimization = true;
+int  program33_draws         = 0;
 
 pp::RenderFix::tracer_s
   pp::RenderFix::tracer;
@@ -40,103 +48,38 @@ crc32 (uint32_t crc, const void *buf, size_t size);
 
 bool drawing_main_scene = false;
 
-typedef GLvoid (WINAPI *glBindRenderbuffer_pfn)(
-  GLenum target,
-  GLuint renderbuffer
+GLsizei game_width  = 1280;
+GLsizei game_height = 720;
+
+GLsizei fb_width    = config.render.scene_res_x;
+GLsizei fb_height   = config.render.scene_res_y;
+
+typedef GLvoid (WINAPI *glCompressedTexSubImage2D_pfn)(
+        GLenum  target,
+        GLint   level,
+        GLint   xoffset,
+        GLint   yoffset,
+        GLsizei width,
+        GLsizei height,
+        GLenum  format,
+        GLsizei imageSize,
+  const GLvoid* data
 );
 
-typedef GLvoid (WINAPI *glGenRenderbuffers_pfn)(
-  GLsizei  n, 
-  GLuint  *renderbuffers
-);
+#define GL_TEXTURE_BASE_LEVEL           0x813C
+#define GL_TEXTURE_MAX_LEVEL            0x813D
 
-typedef GLvoid (WINAPI *glDeleteRenderbuffers_pfn)(
-        GLsizei  n,
-  const GLuint  *renderbuffers
-);
+#define GL_TEXTURE0                     0x84C0
+#define GL_ACTIVE_TEXTURE               0x84E0
 
-typedef GLvoid (WINAPI *glBindTexture_pfn)(
-  GLenum target,
-  GLuint texture
-);
+#define GL_TEXTURE_RECTANGLE            0x84F5
 
-typedef GLvoid (WINAPI *glFramebufferTexture2D_pfn)(
-  GLenum target,
-  GLenum attachment,
-  GLenum textarget,
-  GLuint texture,
-  GLint level
-);
+#define GL_UNSIGNED_INT_8_8_8_8_REV     0x8367
+#define GL_BGRA                         0x80E1
 
-typedef GLvoid (WINAPI *glFramebufferRenderbuffer_pfn)(
-  GLenum target,
-  GLenum attachment,
-  GLenum renderbuffertarget,
-  GLuint renderbuffer
-);
 
-typedef GLvoid (WINAPI *glGenFramebuffers_pfn)(
-  GLsizei  n,
-  GLuint  *framebuffers
-);
+static GLfloat pixel_maps [10][256];
 
-typedef GLenum (WINAPI *glCheckFramebufferStatus_pfn)(
-  GLenum target
-);
-
-typedef GLvoid (WINAPI *glReadPixels_pfn)(
-  GLint   x,
-  GLint   y,
-  GLsizei width,
-  GLsizei height,
-  GLenum  format,
-  GLenum  type,
-  GLvoid* data
-);
-
-typedef GLvoid (WINAPI *glDrawBuffers_pfn)(
-        GLsizei n,
-  const GLenum* bufs
-);
-
-#define GL_MULTISAMPLE                    0x809D
-
-#define GL_FRAMEBUFFER_BINDING            0x8CA6
-#define GL_DRAW_FRAMEBUFFER_BINDING       0x8CA6
-#define GL_READ_FRAMEBUFFER_BINDING       0x8CAA
-
-#define GL_FRAMEBUFFER_COMPLETE           0x8CD5
-
-#define GL_RENDERBUFFER_BINDING           0x8CA7
-#define GL_RENDERBUFFER                   0x8D41
-
-#define GL_READ_FRAMEBUFFER               0x8CA8
-#define GL_DRAW_FRAMEBUFFER               0x8CA9
-#define GL_FRAMEBUFFER                    0x8D40
-
-#define GL_DRAW_BUFFER0                   0x8825
-
-#define GL_COLOR_ATTACHMENT0              0x8CE0
-#define GL_DEPTH_ATTACHMENT               0x8D00
-
-#define GL_DEPTH_COMPONENT24              0x81A6
-#define GL_RG                             0x8227
-#define GL_R8                             0x8229
-#define GL_RG8                            0x8051
-#define GL_RGBA8                          0x8058
-#define GL_R16F                           0x822D
-#define GL_RG16F                          0x822F
-#define GL_RGB16F                         0x881B
-#define GL_RGBA16F                        0x881A
-#define GL_RGB32F                         0x8815
-
-#define GL_R11F_G11F_B10F                 0x8C3A
-#define GL_RGB10_A2                       0x8059
-
-#define GL_CLAMP_TO_EDGE                  0x812F
-#define GL_MIRRORED_REPEAT                0x8370
-
-#define GL_TEXTURE_SWIZZLE_RGBA           0x8E46
 
 glGenRenderbuffers_pfn               glGenRenderbuffers                 = nullptr;
 glBindRenderbuffer_pfn               glBindRenderbuffer                 = nullptr;
@@ -158,9 +101,15 @@ glBindTexture_pfn                    glBindTexture_Original             = nullpt
 glTexImage2D_pfn                     glTexImage2D_Original              = nullptr;
 glTexSubImage2D_pfn                  glTexSubImage2D_Original           = nullptr;
 glCompressedTexImage2D_pfn           glCompressedTexImage2D_Original    = nullptr;
+glCompressedTexSubImage2D_pfn        glCompressedTexSubImage2D          = nullptr;
 glCopyTexSubImage2D_pfn              glCopyTexSubImage2D_Original       = nullptr;
 glDeleteTextures_pfn                 glDeleteTextures_Original          = nullptr;
 glTexParameteri_pfn                  glTexParameteri_Original           = nullptr;
+glGenerateMipmap_pfn                 glGenerateMipmap                   = nullptr;
+
+// Fast-path to avoid redundant CPU->GPU data transfers (there are A LOT of them)
+glCopyImageSubData_pfn               glCopyImageSubData                 = nullptr;
+
 
 glReadPixels_pfn                     glReadPixels_Original              = nullptr;
 
@@ -176,6 +125,7 @@ glDisable_pfn                        glDisable_Original                 = nullpt
                                                                         
 glAlphaFunc_pfn                      glAlphaFunc_Original               = nullptr;
 glBlendFunc_pfn                      glBlendFunc_Original               = nullptr;
+glDepthMask_pfn                      glDepthMask_Original               = nullptr;
                                                                         
 glScissor_pfn                        glScissor_Original                 = nullptr;
 glViewport_pfn                       glViewport_Original                = nullptr;
@@ -185,6 +135,7 @@ glDrawArrays_pfn                     glDrawArrays_Original              = nullpt
 glUseProgram_pfn                     glUseProgram_Original              = nullptr;
 glGetShaderiv_pfn                    glGetShaderiv_Original             = nullptr;
 glShaderSource_pfn                   glShaderSource_Original            = nullptr;
+glAttachShader_pfn                   glAttachShader_Original            = nullptr;
                                                                         
 glUniformMatrix4fv_pfn               glUniformMatrix4fv_Original        = nullptr;
 glUniformMatrix3fv_pfn               glUniformMatrix3fv_Original        = nullptr;
@@ -210,6 +161,12 @@ wglMakeCurrent_pfn                   wglMakeCurrent_Original            = nullpt
 BMF_BeginBufferSwap_pfn              BMF_BeginBufferSwap                = nullptr;
 BMF_EndBufferSwap_pfn                BMF_EndBufferSwap                  = nullptr;
 
+typedef GLvoid (WINAPI *glClear_pfn)(
+  GLbitfield mask
+);
+
+glClear_pfn glClear_Original = nullptr;
+
 extern void
 PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
                                  GLint    level,
@@ -233,14 +190,47 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
 
 
 #include <map>
+#include <unordered_set>
+
+// Technically, we could have 80, but this game only uses two stages...
+struct {
+  struct tex1d_s {
+    GLuint    name;
+    GLboolean enable;
+  } tex1d;
+
+  struct texRect_s {
+    GLuint    name;
+    GLboolean enable;
+  } texRect;
+
+  struct tex2d_s {
+    GLuint    name;
+    GLboolean enable;
+  } tex2d;
+
+  struct tex3d_s {
+    GLuint    name;
+    GLboolean enable;
+  } tex3d;
+} current_textures [32] = { { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 } };
+
+GLuint active_texture = 0;
+
+std::unordered_set <GLuint> opaque_texids;
+std::unordered_set <GLuint> translucent_texids;
 
 bool deferred_msaa = false;
 
+// The game hard-codes GL object names, yet another thing that will make porting
+//   difficult for NIS... but it makes modding easy :)
 struct {
-  GLuint color        = GL_NONE;
-  GLuint position     = GL_NONE;
-  GLuint normal       = GL_NONE;
-  GLuint depth        = GL_NONE;
+  GLuint shadow       = 67552UL; // Shadow   (FBO=1)
+  GLuint color        = 67553UL; // Color    (FBO=2)
+  GLuint depth        = 67554UL; // Depth    (FBO=2)
+  GLuint normal       = 67555UL; // Normal   (FBO=2)
+  GLuint position     = 67556UL; // Position (FBO=2)
+  GLuint unknown      = 67557UL; // Unknown  (FBO=3)
 } render_targets;
 
 struct msaa_ref_s {
@@ -290,6 +280,8 @@ public:
 
 GLuint active_fbo       = 0;
 
+// Not used yet
+#if 0
 class PP_Framebuffer {
 public:
   int getNumAttachments    (void) {
@@ -306,23 +298,38 @@ protected:
 
 private:
 };
+#endif
 
 
 // These are textures that should always be clamped to edge for proper
 //   smoothing behavior
-#include <set>
-std::set <GLuint> ui_textures;
+#include <unordered_set>
+std::unordered_set <GLuint> ui_textures;
+
+using namespace pp;
 
 GLuint active_program = 0;
+bool   postprocessing = false;
+bool   postprocessed  = false;
 
 COM_DECLSPEC_NOTHROW
 void
 STDMETHODCALLTYPE
 OGLEndFrame_Pre (void)
 {
+  postprocessing = false;
+  postprocessed  = false;
+
+BEGIN_TASK_TIMING
+  if (GLPerf::timers [GLPerf::TASK_END_UI]->isReady ()) {
+    GLPerf::timers [GLPerf::TASK_END_UI]->requestTimestamp ();
+  }
+END_TASK_TIMING
+
   //pp::RenderFix::dwRenderThreadID = GetCurrentThreadId ();
 
   active_program  = 0;
+  program33_draws = 0;
 
   void PPrinny_DrawCommandConsole (void);
   PPrinny_DrawCommandConsole ();
@@ -345,12 +352,103 @@ OGLEndFrame_Post (HRESULT hr, IUnknown* pDev)
 
   HRESULT ret = BMF_EndBufferSwap (S_OK, nullptr);
 
-  if (config.render.msaa_samples > 1) {
-    if (msaa.use)
-      glEnable (GL_MULTISAMPLE);
-    else
-      glDisable (GL_MULTISAMPLE);
+
+  // Additional text that we can print below the command console
+  extern std::string mod_text;
+
+BEGIN_TASK_TIMING
+  if (GLPerf::timers [GLPerf::TASK_BEGIN_FRAME]->isReady ()) {
+    GLPerf::timers [GLPerf::TASK_BEGIN_FRAME]->requestTimestamp ();
+  } else {
+    if (GLPerf::timers [GLPerf::TASK_END_FRAME]->isReady ())
+      GLPerf::timers [GLPerf::TASK_END_FRAME]->requestTimestamp ();
+
+    if (GLPerf::timers [GLPerf::TASK_END_FRAME]->isFinished ()) {
+      GLuint64 start,end;
+
+      struct {
+        GLuint64 ts0, ts1,
+                 ts2, ts3;
+
+        GLuint64 ts_start = 0ULL,
+                 ts_end   = 0ULL;
+      } msaa_times;
+
+      GLuint64 pp_start, pp_end;
+      GLuint64 ui_start, ui_end;
+
+     static DWORD         dwTime = timeGetTime ();
+     static unsigned char spin    = 193;
+
+     if (dwTime < timeGetTime ()-100UL)
+       spin++;
+
+     if (spin > 199)
+       spin = 193;
+
+      if (config.render.msaa_samples > 1 && msaa.use) {
+        GLPerf::timers [GLPerf::TASK_MSAA0]->getResulIfFinished (&msaa_times.ts0);
+        GLPerf::timers [GLPerf::TASK_MSAA1]->getResulIfFinished (&msaa_times.ts1);
+        GLPerf::timers [GLPerf::TASK_MSAA2]->getResulIfFinished (&msaa_times.ts2);
+        GLPerf::timers [GLPerf::TASK_MSAA3]->getResulIfFinished (&msaa_times.ts3);
+
+        msaa_times.ts_start = min ( msaa_times.ts0,
+                                      min ( msaa_times.ts1,
+                                              min ( msaa_times.ts2, 
+                                                      msaa_times.ts3 ) ) );
+        msaa_times.ts_end   = max ( msaa_times.ts0,
+                                      max ( msaa_times.ts1,
+                                              max ( msaa_times.ts2,
+                                                      msaa_times.ts3 ) ) );
+      }
+
+      GLPerf::timers [GLPerf::TASK_BEGIN_POSTPROC]->getResulIfFinished (&pp_start);
+      GLPerf::timers [GLPerf::TASK_END_POSTPROC]->getResulIfFinished   (&pp_end);
+
+      GLPerf::timers [GLPerf::TASK_BEGIN_UI]->getResulIfFinished       (&ui_start);
+      GLPerf::timers [GLPerf::TASK_END_UI]->getResulIfFinished         (&ui_end);
+
+      GLPerf::timers [GLPerf::TASK_BEGIN_FRAME]->getResulIfFinished    (&start);
+      GLPerf::timers [GLPerf::TASK_END_FRAME]->getResulIfFinished      (&end);
+
+      GLuint64 msaa_time     = (msaa_times.ts_end - msaa_times.ts_start) * 2,
+               postproc_time = (pp_end            - pp_start),
+               ui_time       = (ui_end            - ui_start),
+               ex_time       = (end               - ui_end);
+
+      GLuint64 max_time = max ( msaa_time,
+                                  max ( ui_time,
+                                          postproc_time ) );
+
+      unsigned char main_status = ' ';
+      unsigned char msaa_status = msaa_time     == max_time ? spin : ' ';
+      unsigned char pp_status   = postproc_time == max_time ? spin : ' ';
+      unsigned char ui_status   = ui_time       == max_time ? spin : ' ';
+      unsigned char ex_status   = ex_time       == max_time ? spin : ' ';
+
+      static char szFrameTimes [512];
+      sprintf ( szFrameTimes, "* Full Frame.: %06.03f ms\n"
+                              "------------------------\n"
+                              //"%c Main Scene.: AA.AAA ms\n"
+                              "%c MSAA.......: %06.03f ms\n"
+                              "%c Post-Proc..: %06.03f ms\n"
+                              "%c UI.........: %06.03f ms\n"
+                              //"%c Other......: %#05.03f ms\n",
+                              ,
+                  (double)(end - start) / 1000000.0,
+          //main_status,
+            msaa_status, (double)(msaa_time) / 1000000.0,
+              pp_status, (double)(postproc_time) / 1000000.0,
+                ui_status, (double)(ui_time) / 1000000.0//,
+                  );//ex_status, (double)(ex_time) / 1000000.0 );
+
+      mod_text = szFrameTimes;
+    }
   }
+IF_NO_TASK_TIMING
+  // Clear the OSD if this is turned off...
+  mod_text = "";
+END_TASK_TIMING
 
   return ret;
 }
@@ -379,8 +477,10 @@ wglSwapIntervalEXT_Detour (int interval)
 }
 
 
-bool real_blend_state   = false;
-bool real_alpha_state   = false;
+GLboolean real_blend_state   = GL_FALSE;
+GLboolean real_alpha_state   = GL_FALSE;
+GLboolean real_depth_test    = GL_FALSE;
+GLboolean real_depth_mask    = GL_FALSE;
 
 GLenum  real_alpha_test = GL_ALWAYS;
 GLfloat real_alpha_ref  = 1.0f;
@@ -394,6 +494,50 @@ GLvoid
 WINAPI
 glUseProgram_Detour (GLuint program)
 {
+  bool redundant = (program == 0 && active_fbo != 0) ||
+                   (program == active_program);
+
+  if (pp::RenderFix::tracer.log) {
+    const bool log_redundant = false;
+    if (log_redundant || (! redundant)) {
+      dll_log.LogEx ( true, L"[ GL Trace ] glUseProgram (%lu)",
+                        program );
+
+      if (redundant)
+        dll_log.LogEx ( false, L" { Redundant }\n" );
+      else
+        dll_log.LogEx ( false, L"\n" );
+    }
+  }
+
+  if (aggressive_optimization) {
+    //
+    // Performance Optimization: STOP invalidating shader cache between draws
+    //
+    if (redundant)
+      return;
+
+#if 0
+    if (active_fbo == 2 || (active_fbo == msaa.resolve_fbo && msaa.resolve_fbo != 0)) {
+      if (program == 33) {
+        GLuint buffers [3] = { GL_COLOR_ATTACHMENT0,
+                               GL_COLOR_ATTACHMENT0 + 1,
+                               GL_COLOR_ATTACHMENT0 + 2 };
+        glDrawBuffers_Original (3, buffers);
+        //glColorMaski (1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        //glColorMask (2, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+      }
+
+      // Ignore the other two color attachments
+      else if (active_program == 33) {
+        //glColorMaski (1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        //glColorMaski (2, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glDrawBuffer (GL_COLOR_ATTACHMENT0);
+      }
+    }
+#endif
+  }
+
   active_program = program;
 
   glUseProgram_Original (program);
@@ -404,6 +548,11 @@ GLvoid
 WINAPI
 glBlendFunc_Detour (GLenum srcfactor, GLenum dstfactor)
 {
+  if (pp::RenderFix::tracer.log) {
+    dll_log.Log ( L"[ GL Trace ] glBlendFunc (0x%X, 0x%X)",
+                    srcfactor, dstfactor );
+  }
+
   src_blend = srcfactor;
   dst_blend = dstfactor;
 
@@ -415,10 +564,25 @@ GLvoid
 WINAPI
 glAlphaFunc_Detour (GLenum alpha_test, GLfloat ref_val)
 {
+  if (pp::RenderFix::tracer.log) {
+    dll_log.Log ( L"[ GL Trace ] glAlphaFunc (0x%X, %f)",
+                    alpha_test, ref_val );
+  }
+
   real_alpha_test = alpha_test;
   real_alpha_ref  = ref_val;
 
   glAlphaFunc_Original (alpha_test, ref_val);
+}
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glDepthMask_Detour (GLboolean flag)
+{
+  real_depth_mask = flag;
+
+  return glDepthMask_Original (flag);
 }
 
 __declspec (noinline)
@@ -429,10 +593,46 @@ glEnable_Detour (GLenum cap)
   // This invalid state setup is embedded in some display lists
   if (cap == GL_TEXTURE) cap = GL_TEXTURE_2D;
 
-  if (cap == GL_TEXTURE_2D) texture_2d = true;
+  if (cap == GL_TEXTURE_2D) {
+    texture_2d = true;
 
-  if (cap == GL_BLEND)      real_blend_state = true;
+    current_textures [active_texture].tex2d.enable = true;
+  }
+
+  if (cap == GL_BLEND)      {
+    bool opaque = true;
+
+#if 0
+    for (int i = 0; i < 32; i++) {
+      // Handle the Steam overlay
+      if ( current_textures [i].texRect.name != 0 ) {
+        opaque = false;
+        break;
+      }
+
+      if ( (active_program != 0 || current_textures [i].tex2d.enable) &&
+           translucent_texids.count ( 
+             current_textures [i].tex2d.name ) ) {
+        opaque = false;
+        break;
+      }
+    }
+
+    if (! opaque)
+      real_blend_state = true;
+    else {
+      //dll_log.Log (L"[GL SpeedUp] Overriding Blend State... [All Opaque]");
+      real_blend_state = false;
+      glDisable_Original (GL_BLEND);
+      return;
+    }
+#else
+    real_blend_state = true;
+#endif
+  }
   if (cap == GL_ALPHA_TEST) real_alpha_state = true;
+
+  if (cap == GL_DEPTH_TEST) real_depth_test  = true;
 
   return glEnable_Original (cap);
 }
@@ -445,10 +645,16 @@ glDisable_Detour (GLenum cap)
   // This invalid state setup is embedded in some display lists
   if (cap == GL_TEXTURE) cap = GL_TEXTURE_2D;
 
-  if (cap == GL_TEXTURE_2D) texture_2d = false;
+  if (cap == GL_TEXTURE_2D) {
+    texture_2d = false;
+
+    current_textures [active_texture].tex2d.enable = false;
+  }
 
   if (cap == GL_BLEND)      real_blend_state = false;
   if (cap == GL_ALPHA_TEST) real_alpha_state = false;
+
+  if (cap == GL_DEPTH_TEST) real_depth_test  = false;
 
   return glDisable_Original (cap);
 }
@@ -464,28 +670,394 @@ glTexParameteri_Detour (
   GLint  param
 )
 {
-#if 0
-  GLint texture = 0;
+  GLuint texId = 0;
 
   if (target == GL_TEXTURE_2D) {
-    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texture);
+    texId = current_textures [active_texture].tex2d.name;
   }
 
-  //
-  // Clamp all UI textures (to edge)
-  //
-  if ( ui_clamp && (pname == GL_TEXTURE_WRAP_S ||
-                    pname == GL_TEXTURE_WRAP_T) ) {
-    if (texture != 0 && ui_textures.find (texture) != ui_textures.end ()) {
-#define GL_CLAMP_TO_EDGE 0x812F 
-      param = GL_CLAMP_TO_EDGE;
+  // We cannot mipmap normal maps, because that would require re-normalization
+  if (active_texture != 0) {
+    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,  0);
+  }
+
+  if (texId >= 67552 && texId <= 67557) {
+    if (texId >= render_targets.color && (pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T))
+      return;
+
+#if 0
+    dll_log.Log ( L"[ GL Trace ] glTexParameteri (GL_TEXTURE_2D, 0x%X, 0x%X) - TexID: %lu",
+                   pname, param, texId );
+#endif
+
+    //if (pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_MIN_FILTER)
+      //param = GL_NEAREST;
+
+#if 0
+#define GL_DEPTH_TEXTURE_MODE 0x884B
+
+    if (pname == GL_DEPTH_TEXTURE_MODE)
+      param = GL_INTENSITY;
+#endif
+  } else {
+    bool force_nearest = config.textures.pixelate > 0;
+
+    GLint fmt;
+    glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &fmt);
+
+    if (force_nearest) {
+      // Don't force nearest-neighbor sampling on UI textures
+      if (/*fmt != GL_RGBA &&*/ (pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_MIN_FILTER))
+        param = GL_NEAREST;
+    }
+
+    if (config.textures.force_mipmaps)
+    {
+      if (pname == GL_TEXTURE_MIN_FILTER) {
+        if (param == GL_LINEAR || param == GL_NEAREST) {
+          GLint width;
+          glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+
+          if (param == GL_NEAREST)
+          {
+            // Pixelation is enhanced when mipmaps are forced, 2 == UBER pixelated ;)
+            if (config.textures.pixelate)
+            {
+              if (config.textures.pixelate == 1)
+                param = GL_NEAREST_MIPMAP_LINEAR;
+              else
+                param = GL_NEAREST_MIPMAP_NEAREST;
+            }
+          } else {
+            param = GL_LINEAR_MIPMAP_LINEAR;
+          }
+        }
+      }
     }
   }
-#endif
 
   return glTexParameteri_Original (target, pname, param);
 }
 
+typedef GLvoid (WINAPI *glTexStorage2D_pfn)(
+  GLenum  target,
+  GLsizei levels,
+  GLenum  internalformat,
+  GLsizei width,
+  GLsizei height
+);
+
+glTexStorage2D_pfn glTexStorage2D = nullptr;
+
+std::unordered_multimap <uint32_t, GLuint> texture_checksums;
+std::unordered_map      <GLuint, uint32_t> texture_checksums_rev;
+
+bool
+PPrinny_TEX_RemoveTextureRecord (GLuint texId)
+{
+  std::unordered_map <GLuint, uint32_t>::iterator it =
+    texture_checksums_rev.find (texId);
+
+  if (it != texture_checksums_rev.end ()) {
+    std::pair < std::unordered_multimap <uint32_t, GLuint>::iterator,
+                std::unordered_multimap <uint32_t, GLuint>::iterator > keys =
+      texture_checksums.equal_range (it->second);
+
+    std::unordered_multimap <uint32_t, GLuint>::iterator key;
+
+    for (key = texture_checksums.begin (); key != texture_checksums.end (); ++key) {// keys.first; key != keys.second; ++key) {
+      if (key->second == texId) {
+        texture_checksums.erase (key);
+      }
+    }
+
+    texture_checksums_rev.erase (it);
+
+    return true;
+  }
+
+  return false;
+}
+
+void
+PPrinny_TEX_AddTextureRecord (GLuint texId, uint32_t checksum)
+{
+  std::unordered_map <GLuint, uint32_t>::iterator it =
+    texture_checksums_rev.find (texId);
+
+  if (it != texture_checksums_rev.end ()) {
+    if (it->second != checksum) {
+      // First, we need to clear any pre-existing record
+      PPrinny_TEX_RemoveTextureRecord (texId);
+    } else {
+      return;
+    }
+  }
+
+  texture_checksums_rev.insert (std::pair <GLuint, uint32_t> (texId, checksum));
+  texture_checksums.insert     (std::pair <uint32_t, GLuint> (checksum, texId));
+}
+
+void
+PPrinny_TEX_GenerateMipmap (GLsizei width, GLsizei height)
+{
+  //glTexParameteri ( GL_TEXTURE_2D,
+                      //GL_TEXTURE_MAX_LEVEL,
+                        //max (0, (int)floor (log2 (max (width,height)))));
+
+  glGenerateMipmap ( GL_TEXTURE_2D );
+
+  if (config.textures.pixelate > 2) {
+    int lod_bias = 1 - config.textures.pixelate;
+
+#define GL_TEXTURE_LOD_BIAS                0x8501
+
+    glTexParameterf ( GL_TEXTURE_2D,
+                        GL_TEXTURE_LOD_BIAS,
+                          (float)lod_bias );
+  }
+}
+
+bool
+PPrinny_TEX_TestOpaque ( GLuint  texId,
+                         GLsizei width,          GLsizei height,
+                         GLenum  internalFormat, GLenum  format,
+                   const GLvoid* data )
+{
+#if 0
+  if (internalFormat == GL_RGBA && format == GL_RGBA) {
+    int first_alpha = 3;
+    int       alpha = first_alpha;
+
+    for (int alpha = first_alpha; alpha < width * height * 4; alpha += 4)
+      if (((uint8_t *)data) [alpha] != 0xff)
+        return false;
+  } else {
+    // Haven't bothered decoding DXT stuff yet...
+    return false;
+  }
+
+  dll_log.Log ( L"Identified texId (%lu) as opaque",
+                  texId );
+  return true;
+#else
+  return false;
+
+  static float fTexData [4*2048*2048];
+
+  bool opaque = true;
+
+  glGetTexImage ( GL_TEXTURE_2D, 0, GL_ALPHA, GL_FLOAT, &fTexData );
+
+  for (int i = 0; i < width * height; i++) {
+    if (fTexData [i] != 1.0f) {
+      opaque = false;
+      break;
+    }
+  }
+
+  if (opaque) {
+    if (translucent_texids.count (texId))
+      translucent_texids.erase (texId);
+
+    opaque_texids.insert (texId);
+
+    //dll_log.Log (L"Opaque Texture Detected... (texId=%lu)", texId);
+
+    return true;
+  }
+
+  else {
+    if (opaque_texids.count (texId))
+      opaque_texids.erase (texId);
+
+    translucent_texids.insert (texId);
+
+    //dll_log.Log (L"Translucent Texture Detected... (texId=%lu)", texId);
+
+    return false;
+  }
+#endif
+}
+
+bool
+PPrinny_TEX_AvoidRedundantCPUtoGPU (
+  GLenum   target,
+  //GLint    level, -- NIS does not know what mipmap LODs are ;)
+  GLenum   internalFormat,
+  GLsizei  width,
+  GLsizei  height,
+
+  uint32_t checksum,
+  GLuint   texId,
+  void*    data_addr )
+{
+  if (! config.textures.caching)
+    return false;
+
+  static DWORD last_purge     = 0;
+  static void* last_data_addr = 0;
+
+#if 0
+  // Cache coherency is strangely a problem, so purge this once per-second.
+  if (timeGetTime () - last_purge > 1000UL) {
+    texture_checksums_rev.clear ();
+    texture_checksums.clear     ();
+    last_purge = timeGetTime    ();
+  }
+#endif
+  // It is likely that some texture manipulation function was not hooked :-\
+
+#if 0
+  // While not technically an error to upload data to the "default" texture, I have my doubts that
+  //   NIS actually intended to do this...
+  if (texId == 0)
+    return false;
+#endif
+
+  if (checksum != 0x00UL) {
+    std::unordered_map <GLuint, uint32_t>::iterator it =
+      texture_checksums_rev.find (texId);
+
+    if (it != texture_checksums_rev.end ()) {
+      if (it->second == checksum && last_data_addr == data_addr)
+        return true;
+    }
+  }
+
+  last_data_addr = data_addr;
+
+  std::unordered_multimap <uint32_t, GLuint>::iterator srcTex =
+      texture_checksums.begin ();//
+
+  std::pair < std::unordered_multimap <uint32_t, GLuint>::iterator,
+              std::unordered_multimap <uint32_t, GLuint>::iterator > range =
+    texture_checksums.equal_range (checksum);
+
+  srcTex = range.first;
+
+  while (srcTex != texture_checksums.end ()) {
+    if (((texId < 67558 && srcTex->second > 67557) ||
+         (texId > 67557 && srcTex->second < 67558)) && srcTex->first == checksum)
+      break;
+    ++srcTex;
+  }
+
+  if (srcTex->second != texId)
+    PPrinny_TEX_AddTextureRecord (texId, checksum);
+
+#if 1
+  if (glCopyImageSubData != nullptr) {
+    // glCopyImageSubData does not like this format...
+    //if (internalFormat == 0x83f3 || width <= 1024)
+      //return false;
+
+    if (srcTex != texture_checksums.end ()) {
+      GLint tex_levels;
+
+      glBindTexture       (GL_TEXTURE_2D, srcTex->second);
+      glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, &tex_levels);
+
+      GLint srcFormat, srcWidth, srcHeight;
+      glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &srcFormat);
+      glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,           &srcWidth);
+      glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT,          &srcHeight);
+
+      if (srcFormat != internalFormat || srcHeight != height || srcWidth != width) {
+//        dll_log.Log (L"[GL SpeedUp] Invalid match detected (%lu)?!", srcTex->second);
+        PPrinny_TEX_RemoveTextureRecord (srcTex->second);
+        glBindTexture (GL_TEXTURE_2D, texId);
+        return false;
+      }
+
+      // GL's default is muy unhelpful
+      if (tex_levels == 1000)
+        tex_levels = 0;
+
+      //dll_log.Log (L"tex_levels: %lu  <== (%lux%lu)", tex_levels, width, height);
+
+      glBindTexture   (GL_TEXTURE_2D, texId);
+      glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, tex_levels);
+
+      int w = width;
+      int h = height;
+
+      tex_levels = 0;
+
+      //if (tex_levels > floor (log2 (max (width, height))))
+        //tex_levels = 0;
+
+      //glTexStorage2D (GL_TEXTURE_2D, tex_levels+1, internalFormat, width, height);
+      for (int i = 0; i <= tex_levels; i++) {
+//        dll_log.Log ( L"[GL SpeedUp] srcTexId: %lu ==> dstTexId: %lu :: (%lux%lu), GL_RGBA (%x), (level: %lu)",
+//                        srcTex->second, texId, w, h, internalFormat, i );
+        glTexImage2D_Original ( GL_TEXTURE_2D, i, internalFormat, w, h, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, nullptr );
+        glCopyImageSubData    ( srcTex->second, GL_TEXTURE_2D, i, 0, 0, 0,
+                                texId,          GL_TEXTURE_2D, i, 0, 0, 0,
+                                w, h, 1 );
+
+        if (w > 1) w /= 2;
+        if (h > 1) h /= 2;
+      }
+
+      if (config.textures.force_mipmaps && tex_levels == 0)
+        PPrinny_TEX_GenerateMipmap (width, height);
+
+      return true;
+    }
+  }
+#endif
+
+  return false;
+}
+
+typedef GLvoid (WINAPI *glPixelTransferi_pfn)(
+  GLenum pname,
+  GLint  param
+);
+
+glPixelTransferi_pfn glPixelTransferi_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glPixelTransferi_Detour (
+  GLenum pname,
+  GLint  param )
+{
+//  dll_log.Log ( L"[ GL Trace ] PixelTransferi: %x, %lu",
+//                  pname, param );
+
+//  glPixelTransferi_Original (pname, param);
+}
+
+typedef GLvoid (WINAPI *glPixelMapfv_pfn)(
+        GLenum   map,
+        GLsizei  mapsize,
+  const GLfloat* values
+);
+
+glPixelMapfv_pfn glPixelMapfv_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glPixelMapfv_Detour (
+        GLenum   map,
+        GLsizei  mapsize,
+  const GLfloat* values )
+{
+  //if ((! aggressive_optimization) || memcmp (pixel_maps [map - GL_PIXEL_MAP_I_TO_I], values, mapsize * sizeof (GLfloat))) {
+    //dll_log.Log (L"Map Change");
+    memcpy (pixel_maps [map - GL_PIXEL_MAP_I_TO_I], values, mapsize * sizeof (GLfloat));
+    //dll_log.Log (L"Pixel Map Size: %lu, idx: %lu", mapsize, map - GL_PIXEL_MAP_I_TO_I);
+    //glPixelMapfv_Original (map, mapsize, values);
+  //} else {
+    //dll_log.Log (L"Redundant glPixelMapfv call cancelled");
+    //return;
+  //}
+}
 
 __declspec (noinline)
 GLvoid
@@ -502,41 +1074,80 @@ glCompressedTexImage2D_Detour (
 {
   uint32_t checksum = crc32 (0, data, imageSize);
 
+  GLuint texId = current_textures [active_texture].tex2d.name;
+
+  //dll_log.Log ( L"texId: %lu, crc32: %x, Level: %li, target: %x, border: %lu, data: %ph",
+                  //texId, checksum, level, target, border, data );
+
+  if ( PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                              internalFormat,
+                                                width,
+                                                  height,
+                                                    checksum,
+                                                      texId, (void *)data ) ) {
+  //dll_log.Log (L"crc32: %x, Level: %li, target: %x, border: %lu, imageSize: %lu, data: %ph",
+               //checksum, level, target, border, imageSize, data);
+
+    if (pp::RenderFix::tracer.log)
+      dll_log.Log (L"[GL SpeedUp] Avoided redundant compressed texture upload...");
+
+    // Happy day! We just skipped a lot of framerate problems.
+    return;
+  }
+
   if (config.textures.dump) {
-    PPrinny_DumpCompressedTexLevel (checksum, level, internalFormat, width, height, imageSize, data);
+    PPrinny_DumpCompressedTexLevel ( checksum,
+                                       level,
+                                         internalFormat,
+                                           width,
+                                             height,
+                                               imageSize,
+                                                 data );
   }
 
 #if 0
-  dll_log.Log ( L"[GL Texture] Loaded Compressed Texture: Level=%li, (%lix%li) {%5.2f KiB}",
-                  level, width, height, (float)imageSize / 1024.0f );
+    dll_log.Log ( L"[GL Texture] Loaded Compressed Texture: Level=%li, (%lix%li) {%5.2f KiB}",
+                    level, width, height, (float)imageSize / 1024.0f );
 #endif
 
-  // These should be clamped to edge, the game does not repeat these and annoying artifacts are visible
-  //   if we don't do this
-  if (checksum == 0xD474EABE ||
-      checksum == 0xD5B07A99 ||
-
-      checksum == 0xB4F15F92 ||
-      checksum == 0x93C585F7 ||
-
-      checksum == 0x6B1AC7B5 ||
-      checksum == 0x595868F0 ||
-
-      checksum == 0x79B6E066 ||
-      checksum == 0xACE9C61  ||
-
-      (width == 1024 && height == 1024)) {
-    GLint texid;
-    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texid);
-    ui_textures.insert (texid);
-  }
-
-  return glCompressedTexImage2D_Original (
+  glCompressedTexImage2D_Original (
     target, level,
       internalFormat,
         width, height,
           border,
             imageSize, data );
+
+  GLuint cacheTexId;
+  glGenTextures (1, &cacheTexId);
+
+  PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                         internalFormat,
+                                           width,
+                                             height,
+                                               checksum,
+                                                 cacheTexId, nullptr );
+
+  glBindTexture (GL_TEXTURE_2D, texId);
+
+  PPrinny_TEX_TestOpaque ( texId,
+                           width,          height,
+                           internalFormat, GL_RGBA,
+                           data );
+
+#if 0
+  // In the event that we are re-specifying a texture, remove its old checksum.
+  if (texture_checksums_rev.count (texId))
+    texture_checksums_rev.erase (texId);
+
+  texture_checksums_rev.insert (std::pair <GLuint, uint32_t> (texId, checksum));
+#endif
+
+  //
+  // Mipmap Generation
+  //
+  if (config.textures.force_mipmaps) {
+    PPrinny_TEX_GenerateMipmap (width, height);
+  }
 }
 
 GLuint
@@ -551,7 +1162,6 @@ MSAABackend::bindFramebuffer (GLenum target, GLuint framebuffer)
   if (! use) {
     framebuffer = resolve_fbo;
   } else if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) {
-
     // On failure to validate FBO, fallback to resolve_fbo
     if (glCheckFramebufferStatus (target) != GL_FRAMEBUFFER_COMPLETE) {
       dll_log.Log ( L"[   MSAA   ] Framebuffer failed completeness check, "
@@ -611,6 +1221,47 @@ MSAABackend::resolveTexture (GLuint texId)
 
   if (it != backing_textures.end ()) {
     if (it->second->dirty) {
+      switch (texId) {
+        case 67554:
+BEGIN_TASK_TIMING
+          if (GLPerf::timers [GLPerf::TASK_MSAA0]->isReady ())
+            GLPerf::timers [GLPerf::TASK_MSAA0]->requestTimestamp ();
+END_TASK_TIMING
+          break;
+        case 67553:
+BEGIN_TASK_TIMING
+           if (GLPerf::timers [GLPerf::TASK_MSAA1]->isReady ())
+            GLPerf::timers [GLPerf::TASK_MSAA1]->requestTimestamp ();
+END_TASK_TIMING
+          break;
+
+        // Normals
+        case 67555:
+BEGIN_TASK_TIMING
+           if (GLPerf::timers [GLPerf::TASK_MSAA2]->isReady ())
+            GLPerf::timers [GLPerf::TASK_MSAA2]->requestTimestamp ();
+END_TASK_TIMING
+
+           //if (aggressive_optimization && program33_draws == 0) {
+             //it->second->dirty = false;
+             //return true;
+           //}
+          break;
+
+        // Position
+        case 67556:
+BEGIN_TASK_TIMING
+           if (GLPerf::timers [GLPerf::TASK_MSAA3]->isReady ())
+            GLPerf::timers [GLPerf::TASK_MSAA3]->requestTimestamp ();
+END_TASK_TIMING
+
+           //if (aggressive_optimization && program33_draws == 0) {
+             //it->second->dirty = false;
+             //return true;
+           //}
+          break;
+      }
+
       if (pp::RenderFix::tracer.log) {
         dll_log.Log ( L"[ GL Trace ] Resolving Dirty Multisampled Texture..."
                       L" (tid=%lu)",
@@ -625,8 +1276,6 @@ MSAABackend::resolveTexture (GLuint texId)
       glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, (GLint *)&read_buffer);
       glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
 
-      // Hard-Coding this makes me nervous, but we will cross that bridge much later
-      //   when it is burning.
       glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, 2);
 
       int buffer = 
@@ -645,9 +1294,9 @@ MSAABackend::resolveTexture (GLuint texId)
       glDrawBuffer (buffer);
 
         glBlitFramebuffer_Original ( 0, 0,
-                                       config.render.scene_res_x, config.render.scene_res_y,
+                                       fb_width, fb_height,
                                      0, 0,
-                                       config.render.scene_res_x, config.render.scene_res_y,
+                                       fb_width, fb_height,
                                      bitmask,
                                        GL_NEAREST );
 
@@ -676,10 +1325,38 @@ glBindFramebuffer_Detour (GLenum target, GLuint framebuffer)
                     target, framebuffer );
 
   if (framebuffer == 2) {
+    // First time binding the scene framebuffer after postprocessing starts
+    //   signals the end of postprocessing...
+    if (postprocessing) {
+      postprocessing = false;
+      postprocessed  = true;
+
+BEGIN_TASK_TIMING
+      if (GLPerf::timers [GLPerf::TASK_END_POSTPROC]->isReady ())
+        GLPerf::timers [GLPerf::TASK_END_POSTPROC]->requestTimestamp ();
+END_TASK_TIMING
+    }
+
     framebuffer = msaa.bindFramebuffer (target, framebuffer);
   }
 
+  // Start of UI rendering
+  if (framebuffer == 0 && postprocessed) {
+BEGIN_TASK_TIMING
+    if (GLPerf::timers [GLPerf::TASK_BEGIN_UI]->isReady ())
+      GLPerf::timers [GLPerf::TASK_BEGIN_UI]->requestTimestamp ();
+END_TASK_TIMING
+  }
+
   glBindFramebuffer_Original (target, framebuffer);
+
+
+  if (config.render.msaa_samples > 1) {
+    if (msaa.use && framebuffer == 2 && framebuffer != msaa.resolve_fbo)
+      glEnable  (GL_MULTISAMPLE);
+    else
+      glDisable (GL_MULTISAMPLE);
+  }
 }
 
 std::wstring
@@ -722,7 +1399,7 @@ PP_FBO_AttachPoint_ToStr (GLenum attach)
 
   if (attach >= GL_COLOR_ATTACHMENT0 && attach <= GL_COLOR_ATTACHMENT0 + 15) {
     wchar_t wszColorLoc [16];
-    swprintf (wszColorLoc, L"Color%li", attach - GL_COLOR_ATTACHMENT0);
+    _swprintf (wszColorLoc, L"Color%li", attach - GL_COLOR_ATTACHMENT0);
     return wszColorLoc;
   }
 
@@ -742,6 +1419,26 @@ glFramebufferRenderbuffer_Detour ( GLenum target,
     if (msaa.attachRenderbuffer (target, attachment, renderbuffer))
       return;
 
+  if (attachment == GL_DEPTH_ATTACHMENT) {
+    if (active_fbo == 2) {
+      glFramebufferTexture2D_Original ( target,
+                                          attachment,
+                                            GL_TEXTURE_2D,
+                                              render_targets.depth,
+                                                0 );
+      return;
+    } /*else if (active_fbo == 1) {
+      glFramebufferTexture2D_Original ( target,
+                                          attachment,
+                                            GL_TEXTURE_2D,
+                                              render_targets.shadow,
+                                                0 );
+      return;
+    }*/
+  }
+
+  //dll_log.Log (L" Attaching RBO %lu to FBO %lu...", renderbuffer, active_fbo);
+
   glFramebufferRenderbuffer_Original ( target,
                                          attachment,
                                            renderbuffertarget,
@@ -757,6 +1454,19 @@ glDrawBuffers_Detour
   const GLenum* bufs
 )
 {
+  if (pp::RenderFix::tracer.log) {
+    dll_log.LogEx ( true, L"[ GL Trace ] glDrawBuffers (%lu, {",
+                      n );
+    for (int i = 0; i < n; i++) {
+      dll_log.LogEx (false, L"0x%X", bufs [i]);
+
+      if (i < n-1)
+        dll_log.LogEx (false, L", ");
+    }
+
+    dll_log.LogEx (false, L"})\n");
+  }
+
   return glDrawBuffers_Original (n, bufs);
 }
 
@@ -780,6 +1490,71 @@ glFramebufferTexture2D_Detour ( GLenum target,
                                             level );
 }
 
+#define GL_PIXEL_PACK_BUFFER         0x88EB
+#define GL_PIXEL_PACK_BUFFER_BINDING 0x88ED
+#define GL_DYNAMIC_READ              0x88E9
+#define GL_STREAM_READ               0x88E1
+
+typedef GLvoid (WINAPI *glGenBuffers_pfn)(
+  GLsizei n,
+  GLuint *buffers
+);
+
+typedef GLvoid (WINAPI *glBindBuffer_pfn)(
+  GLenum target,
+  GLuint buffer
+);
+
+typedef GLvoid (WINAPI *glBufferData_pfn)(
+        GLenum  target,
+        GLsizei size,
+  const GLvoid *data,
+        GLenum  usage
+);
+
+typedef GLvoid (WINAPI *glGetBufferSubData_pfn)(
+  GLenum  target,
+  GLsizei offset,
+  GLsizei size,
+  GLvoid *data
+);
+
+typedef struct __GLsync *GLsync;
+
+typedef GLsync (WINAPI *glFenceSync_pfn)(
+  GLenum     condition,
+  GLbitfield flags
+);
+
+typedef GLenum (WINAPI *glClientWaitSync_pfn)(
+  GLsync     sync,
+  GLbitfield flags,
+  GLuint64   timeout
+);
+
+typedef GLvoid (WINAPI *glDeleteSync_pfn)(
+  GLsync sync
+);
+
+glGenBuffers_pfn       glGenBuffers       = nullptr;
+glBindBuffer_pfn       glBindBuffer       = nullptr;
+glBufferData_pfn       glBufferData       = nullptr;
+glGetBufferSubData_pfn glGetBufferSubData = nullptr;
+
+glFenceSync_pfn      glFenceSync      = nullptr;
+glClientWaitSync_pfn glClientWaitSync = nullptr;
+glDeleteSync_pfn     glDeleteSync     = nullptr;
+
+#define GL_SYNC_FLUSH_COMMANDS_BIT    0x0001
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_ALREADY_SIGNALED           0x911A
+#define GL_CONDITION_SATISFIED        0x911C
+
+
+bool wait_one_extra = false;//true;
+bool waited         = false;
+
+
 __declspec (noinline)
 GLvoid
 WINAPI
@@ -800,34 +1575,107 @@ glReadPixels_Detour ( GLint   x,
                           data,
                             GetCurrentThreadId () );
   }
+
   // This is designed to read a 10x10 region at the center
   //   of the screen. That of course only works if 720p is
   //     forced.
-  if (x == 635 && y == 355) {
-    x = config.render.scene_res_x/2 - 5;
-    y = config.render.scene_res_y/2 - 5;
-  }
+  if (x == game_width / 2 - 5 && y == game_height / 2 - 5) {
+    x = fb_width  / 2 - 5;
+    y = fb_height / 2 - 5;
 
+    static GLubyte cached_data [10 * 10 * 4] = { 0 };
+    static GLuint  pbo = 0;
 
+    if (pbo == 0) {
+      glGenBuffers (1, &pbo);
+
+      GLuint original_pbo;
+      glGetIntegerv (GL_PIXEL_PACK_BUFFER_BINDING, (GLint *)&original_pbo);
+
+      glBindBuffer (GL_PIXEL_PACK_BUFFER, pbo);
+      glBufferData (GL_PIXEL_PACK_BUFFER, 10 * 10 * 4, nullptr, GL_DYNAMIC_READ);
+
+      glBindBuffer (GL_PIXEL_PACK_BUFFER, original_pbo);
+    }
+
+    //
+    // Even on systems that do not support sync objects, the way this is written
+    //   it will introduce at least a 1 frame latency between issuing a read
+    //     and actually trying to get the result, which helps performance.
+    //
+    //  On a system with sync object support, this is very efficient.
+    //
+    static GLsync fence = nullptr;
+    if (fence == nullptr) {
 // For Depth of Field  (color buffers should alreaby be resolved)
 #if 1
-  if (config.render.msaa_samples > 1) {
-    GLuint read_fbo, draw_fbo;
-    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, (GLint *)&read_fbo);
-    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&draw_fbo);
+      if (config.render.msaa_samples > 1) {
+        GLuint read_fbo, draw_fbo;
+        glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, (GLint *)&read_fbo);
+        glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&draw_fbo);
 
-    if (read_fbo == 2 && msaa.use) {
-      GLuint read_buffer;
-      glGetIntegerv (GL_READ_BUFFER, (GLint *)&read_buffer);
+        if (read_fbo == 2 && msaa.use) {
+          GLuint read_buffer;
+          glGetIntegerv (GL_READ_BUFFER, (GLint *)&read_buffer);
 
-       msaa.resolveTexture (pp::RenderFix::draw_state.depth_tex);
+          msaa.resolveTexture (pp::RenderFix::draw_state.depth_tex);
 
-      glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, msaa.resolve_fbo);
-      glReadBuffer               (read_buffer);
-    }
-  }
+          glBindFramebuffer_Original (GL_READ_FRAMEBUFFER, msaa.resolve_fbo);
+          glReadBuffer               (read_buffer);
+        }
+      }
 #endif
 
+      GLuint original_pbo;
+      glGetIntegerv         (GL_PIXEL_PACK_BUFFER_BINDING, (GLint *)&original_pbo);
+
+      glBindBuffer          (GL_PIXEL_PACK_BUFFER, pbo);
+      glReadPixels_Original (x, y, width, height, format, type, nullptr);
+
+      if (glFenceSync != nullptr)
+        fence = glFenceSync (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+      else
+        fence = (GLsync)0x01;
+
+      //dll_log.Log ( L"[GL SyncOp] Inserted fence sync (%ph) into command stream "
+                    //L"for glReadPixels (...)", fence );
+
+      glBindBuffer          (GL_PIXEL_PACK_BUFFER, original_pbo);
+
+    } else {
+
+      GLenum status = 
+        glClientWaitSync != nullptr ?
+          glClientWaitSync ( fence, 0x00/*GL_SYNC_FLUSH_COMMANDS_BIT*/, 0ULL ) :
+            GL_CONDITION_SATISFIED;
+
+      if (status == GL_CONDITION_SATISFIED || status == GL_ALREADY_SIGNALED) {
+        if (wait_one_extra && (! waited))
+          waited = true;
+        else {
+          waited = false;
+          //dll_log.Log (L"[GL SyncOp] ReadPixels complete...");
+
+          if (glDeleteSync != nullptr)
+            glDeleteSync (fence);
+
+          fence = nullptr;
+
+          GLuint original_pbo;
+          glGetIntegerv (GL_PIXEL_PACK_BUFFER_BINDING, (GLint *)&original_pbo);
+
+          glBindBuffer       (GL_PIXEL_PACK_BUFFER, pbo);
+          glGetBufferSubData (GL_PIXEL_PACK_BUFFER, 0, 10 * 10 * 4, cached_data);
+          glBindBuffer       (GL_PIXEL_PACK_BUFFER, original_pbo);
+        }
+      } else {
+        //dll_log.Log (L"[GL SyncOp] glClientWaitSync --> %x", status);
+      }
+    }
+
+    memcpy (data, cached_data, 10 * 10 * 4);
+    return;
+  }
 
   return glReadPixels_Original (x, y, width, height, format, type, data);
 }
@@ -839,34 +1687,28 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
 {
   bool fringed = false;
 
-  //
-  // The stuff this does, holy crap ... it will torture the GL state machine, so focus heavily on
-  //   client-side detection heuristics.
-  //
   if (config.render.fringe_removal) {
     bool world  = (mode == GL_TRIANGLES);// && count < 180);//      && count == 6);
     bool sprite = (mode == GL_TRIANGLE_STRIP && count == 4);
 
      if (drawing_main_scene && (world || sprite)) {
-       GLboolean depth_mask, depth_test;
-       glGetBooleanv (GL_DEPTH_WRITEMASK, &depth_mask);
-       glGetBooleanv (GL_DEPTH_TEST,      &depth_test);
-
-       if (depth_mask && depth_test && texture_2d) {
+       if ( real_depth_mask &&
+            real_depth_test &&
+            current_textures [active_texture].tex2d.enable ) {
 
        GLint filter;
-       glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &filter);
+       glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
 
-       if (filter == GL_LINEAR) {
-       glPushAttrib (GL_COLOR_BUFFER_BIT);
+       if (filter == GL_LINEAR || filter == GL_LINEAR_MIPMAP_LINEAR || filter == GL_LINEAR_MIPMAP_NEAREST) {
+       glDepthMask_Original (GL_FALSE);
 
-       glDepthMask   (GL_FALSE);
-
-       //
-       // SSAO Hacks
-       //
-       glColorMaski (1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-       glColorMaski (2, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+       //if (active_program == 33 || (! aggressive_optimization)) {
+         //
+         // SSAO Hacks
+         //
+         glColorMaski (1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+         glColorMaski (2, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+       //}
 
        {
          glEnable_Original (GL_ALPHA_TEST);
@@ -879,10 +1721,12 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
          glDrawArrays_Original (mode, first, count);
        }
 
-       glColorMaski (2, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-       glColorMaski (1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+       //if (active_program == 33 || (! aggressive_optimization)) {
+         glColorMaski (2, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+         glColorMaski (1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+       //}
 
-       glDepthMask (GL_TRUE);
+       glDepthMask_Original (GL_TRUE);
 
        if (sprite) {
          glAlphaFunc_Original (GL_GEQUAL, 0.425f);
@@ -897,7 +1741,10 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
        if (pp::RenderFix::tracer.log)
          dll_log.Log (L"[ GL Trace ] Fringed draw: %X, %d, %d -- GLSL program: %lu", mode, first, count, active_program);
       }
-    }
+      } //else {
+        //dll_log.Log (L" Fringe Failure: Mask: %d, Test: %d, Tex2D: %d",
+                       //real_depth_mask, real_depth_test, texture_2d);
+      //}
     }
   }
 
@@ -907,9 +1754,13 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
   //   intended to reflect the APPLICATION's drawcall count, not the mod's.
   pp::RenderFix::draw_state.draws++;
 
-  if (fringed) {
-    glPopAttrib ();
-  }
+  // Tracking whether or not the normal / position drawbuffers are dirty
+  if (active_program == 33)
+    program33_draws++;
+
+  // Restore the original alpha function
+  if (fringed)
+    glAlphaFunc_Original (GL_GREATER, 0.01f);
 }
 
 __declspec (noinline)
@@ -929,8 +1780,6 @@ GLvoid
 WINAPI
 glGetFloatv_Detour (GLenum pname, GLfloat* pparams)
 {
-#define GL_COLOR_MATRIX_SGI 0x80B1
-
   // Intel does not support this
   if (pname == GL_COLOR_MATRIX_SGI) {
     const float fZero = 0.0f;
@@ -944,11 +1793,30 @@ glGetFloatv_Detour (GLenum pname, GLfloat* pparams)
 }
 
 
+
+
+
+
 __declspec (noinline)
 GLvoid
 WINAPI
 glDeleteTextures_Detour (GLsizei n, GLuint* textures)
 {
+  // Don't log the craziness that happens at shutdown...
+  if (n != 67551) {
+    dll_log.LogEx ( true, L"[ GL Trace ] glDeleteTextures (%lu, { ",
+                      n );
+
+    for (int i = 0; i < n; i++) {
+      dll_log.LogEx ( false, L"%lu", textures [i]);
+
+      if (i < n-1)
+        dll_log.LogEx (false, L", ");
+    }
+
+    dll_log.LogEx (false, L" })\n");
+  }
+
   for (int i = 0; i < n; i++) {
     if (ui_textures.find (textures [i]) != ui_textures.end ()) {
       //dll_log.Log (L"Deleted UI texture");
@@ -957,6 +1825,12 @@ glDeleteTextures_Detour (GLsizei n, GLuint* textures)
 
     msaa.deleteTexture (textures [i]);
 
+    if (texture_checksums_rev.count (textures [i])) {
+      texture_checksums_rev.erase (textures [i]);
+    }
+
+#if 0
+    /// XXX: This probably is not necessary, we will just attach something new there anyway.
     if (textures [i] == pp::RenderFix::draw_state.depth_tex) {
       if (config.render.msaa_samples > 1) {
         GLuint fbo;
@@ -968,6 +1842,7 @@ glDeleteTextures_Detour (GLsizei n, GLuint* textures)
 
       pp::RenderFix::draw_state.depth_tex = 0;
     }
+#endif
   }
 
   glDeleteTextures_Original (n, textures);
@@ -996,19 +1871,53 @@ glTexSubImage2D_Detour ( GLenum  target,
             pixels );
 }
 
+typedef GLvoid (WINAPI *glActiveTexture_pfn)(
+  GLenum texture
+);
+
+glActiveTexture_pfn glActiveTexture_Original = nullptr;
+
+__declspec (noinline)
+GLvoid
+WINAPI
+glActiveTexture_Detour ( GLenum texture )
+{
+  active_texture = texture-GL_TEXTURE0;
+
+  glActiveTexture_Original (texture);
+}
+
 __declspec (noinline)
 GLvoid
 WINAPI
 glBindTexture_Detour ( GLenum target,
                        GLuint texture )
 {
-  if (config.render.msaa_samples > 1) {
+  if (texture == 0)
+    return;//texture = 131072;
+
+  if (target == GL_PROXY_TEXTURE_2D)
+    dll_log.Log (L"Oh noes!");
+
+  // TODO: Cubemaps and various others (rectangle for instance)
+  if (target == GL_TEXTURE_2D)
+    current_textures [active_texture].tex2d.name = texture;
+  else if (target == GL_TEXTURE_1D)
+    current_textures [active_texture].tex1d.name = texture;
+  else if (target == GL_TEXTURE_RECTANGLE)
+    current_textures [active_texture].texRect.name = texture;
+
+
+  if (target == GL_TEXTURE_2D && config.render.msaa_samples > 1) {
     if (msaa.use)
       msaa.resolveTexture (texture);
   }
 
+
   return glBindTexture_Original (target, texture);
 }
+
+#define GL_PIXEL_UNPACK_BUFFER_BINDING 0x88EF
 
 __declspec (noinline)
 GLvoid
@@ -1023,10 +1932,19 @@ glTexImage2D_Detour ( GLenum  target,
                       GLenum  type,
                 const GLvoid* data )
 {
+  bool depaletted = false;
+
+  uint32_t checksum = 0x0UL;
+
+  GLuint texId = current_textures [active_texture].tex2d.name;
+
+  //dll_log.Log ( L"[GL Texture] Target: %X, InternalFmt: %X, Format: %X, Type: %X, (%lux%lu @ %lu), data: %ph  [texId: %lu, unit: %lu]",
+                 //target, internalformat, format, type, width, height, level, data, texId, active_texture );
+
   if (data != nullptr) {
   if (internalformat == GL_RGBA) {
     const int imageSize = width * height * 4;
-    uint32_t  checksum  = crc32 (0, data, imageSize);
+              checksum  = crc32 (0, data, imageSize);
 
     if (config.textures.dump) {
       //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
@@ -1070,8 +1988,7 @@ glTexImage2D_Detour ( GLenum  target,
           fread  (tex, size, 1, fTGA);
           fclose (fTGA);
 
-          GLint texId;
-          glGetIntegerv (GL_TEXTURE_BINDING_2D, &texId);
+          GLint texId = current_textures [active_texture].tex2d.name;
           ui_textures.insert (texId);
 
           glTexImage2D_Original ( target,
@@ -1083,6 +2000,8 @@ glTexImage2D_Detour ( GLenum  target,
                                               type,
                                                 tex );
 
+          PPrinny_TEX_GenerateMipmap (width, height);
+
           free (tex);
           return;
         }
@@ -1091,18 +2010,12 @@ glTexImage2D_Detour ( GLenum  target,
   }
 
   if (format == GL_COLOR_INDEX) {
-    GLint texId;
-    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texId);
-    ui_textures.insert (texId);
-  }
-
-  if (config.textures.dump && format == GL_COLOR_INDEX) {
     // This sort of palette is easy, anything else will require a lot of work.
     if (type == GL_UNSIGNED_BYTE) {
-      if (config.textures.dump) {
-        const int imageSize = width * height;
-        uint32_t  checksum  = crc32 (0, data, imageSize);
+      const int imageSize = width * height;
+                checksum  = crc32 (0, data, imageSize);
 
+      if (config.textures.dump) {
        //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
 
         PPrinny_DumpUncompressedTexLevel (
@@ -1113,20 +2026,70 @@ glTexImage2D_Detour ( GLenum  target,
                   imageSize,
                     data );
       }
+
+        uint8_t* out_img = new uint8_t [width * height * 4];
+
+        for (int i = 0, j = 0 ; j < width * height ; j++, i += 4) {
+          out_img [ i + 2 ] = 255 * pixel_maps [2][((uint8_t *)data) [j]];
+          out_img [ i + 1 ] = 255 * pixel_maps [3][((uint8_t *)data) [j]];
+          out_img [ i     ] = 255 * pixel_maps [4][((uint8_t *)data) [j]];
+          out_img [ i + 3 ] = 255 * pixel_maps [5][((uint8_t *)data) [j]];
+        }
+
+        checksum = crc32 (0, out_img, width * height * 4);
+
+        if ( PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                                    GL_RGBA,
+                                                      width,
+                                                        height,
+                                                          checksum,
+                                                            texId, (void *)out_img )) {
+          delete [] out_img;
+//          dll_log.Log (L"[GL SpeedUp] Avoided redundant paletted texture upload...");
+          // Happy day! We just skipped a lot of framerate problems.
+          return;
+        }
+        //glPixelTransferi_Original (GL_MAP_COLOR, 0);
+
+        glTexImage2D_Original (target, level, GL_RGBA, width, height, border, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, out_img);
+        delete [] out_img;
+
+        //PPrinny_TEX_RemoveTextureRecord (texId);
+
+        GLuint cacheTexId;
+        glGenTextures (1, &cacheTexId);
+
+        //glBindTexture  (GL_TEXTURE_2D, cacheTexId);
+        ////glTexImage2D_Original (GL_TEXTURE_2D, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        //glTexStorage2D (GL_TEXTURE_2D, 1/*log2 (max (width, height))*/, GL_RGBA, width, height);
+
+        ////glCopyImageSubData ( texId,      GL_TEXTURE_2D, 0, 0, 0, 0,
+                             ////cacheTexId, GL_TEXTURE_2D, 0, 0, 0, 0,
+                             ////width, height, 0 );
+
+        PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                                    GL_RGBA,
+                                                      width,
+                                                        height,
+                                                          checksum,
+                                                            cacheTexId, (void *)nullptr );
+
+        glBindTexture  (GL_TEXTURE_2D, texId);
+
+        //dll_log.Log (L"Depaletted!");
+
+        ///////format = GL_RGBA;
+        depaletted = true;
     } else {
       dll_log.Log ( L"[ Tex Dump ] Color Index Format: (%lux%lu), Data Type: 0x%X",
                       width, height, type );
     }
   }
-
   }
 
-  GLint texId;
-  glGetIntegerv (GL_TEXTURE_BINDING_2D, &texId);
 
-  if (data == nullptr) {
-    //ui_textures.insert (texId);
-
+  // data == nullptr
+  else {
     dll_log.Log ( L"[GL Texture] Id=%i, LOD: %i, (%ix%i)",
                     texId, level, width, height );
 
@@ -1135,13 +2098,11 @@ glTexImage2D_Detour ( GLenum  target,
                     PP_GL_InternalFormat_ToStr (internalformat).c_str () );
 
     if (internalformat == GL_RGBA16F) {
-      render_targets.position = texId;
-
       internalformat = config.render.high_precision_ssao ? GL_RGB32F : GL_RGB16F;
       format         = GL_RGB;
 
-      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT );
-      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT );
+      glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT );
+      glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT );
     }
 
     // Avoid driver weirdness from using a non-color renderable format
@@ -1149,8 +2110,8 @@ glTexImage2D_Detour ( GLenum  target,
       internalformat = GL_R8;
       format         = GL_RED;
 
-      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+      glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+      glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
 
       dll_log.Log ( L"[Compliance] Setting up swizzle mask (r,r,r,1) on "
                     L"GL_R8 instead of rendering to GL_LUMINANCE8" );
@@ -1160,63 +2121,127 @@ glTexImage2D_Detour ( GLenum  target,
       glTexParameteriv ( GL_TEXTURE_2D,
                            GL_TEXTURE_SWIZZLE_RGBA,
                              swizzleMeTimbers );
-    } else {
-      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT );
-      glTexParameteri ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT );
+    } else if (internalformat != GL_DEPTH_COMPONENT) {
+      glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT );
+      glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT );
     }
 
-#if 0
-    if (internalformat == GL_DEPTH_COMPONENT)
-      internalformat = GL_DEPTH_COMPONENT24;
-#endif
+    if (texId >= render_targets.color && texId <= render_targets.position+1) {
 
-#if 0
-    // For the sake of memory alignment (the driver is going to do this anyway),
-    //   just pad all RGB stuff out to RGBA (where A is implicitly ignored)
-    if (internalformat == GL_RGB) {
-      internalformat = GL_RGBA8;
-      format         = GL_RGBA;
-    }
-#endif
+      //pp::RenderFix::fullscreen = true;
 
-    if (width == 1280 && height == 720) {
-      pp::RenderFix::fullscreen = true;
+      game_height = height;
+      game_width  = width;
 
-      width  = config.render.scene_res_x;
-      height = config.render.scene_res_y;
+      if (game_height >= 720 && game_width >= 1280) {
+        fb_width  = config.render.scene_res_x;
+        fb_height = config.render.scene_res_y;
+      } else {
+        fb_width  = game_width;
+        fb_height = game_height;
+      }
+
+      width  = fb_width;
+      height = fb_height;
 
       if (config.render.msaa_samples > 1)
         msaa.createTexture (texId, internalformat, width, height);
-    } else if (internalformat != GL_DEPTH_COMPONENT) {
-      // This was good in theory, but ... Steam in-home Streaming creates
-      //   additional rendertargets...
-      //pp::RenderFix::fullscreen = false;
     }
-
-#if 0
-    if (width == 960 && height == 544) {
-      width  = config.render.scene_res_x;
-      height = config.render.scene_res_y;
-    }
-#endif
-
-#if 0
-    if (width == 1024 && height == 512) {
-      width = RES_X; height = RES_Y;
-    }
-#endif
-  } else {
-    // Font Textures
-    //if (width == 1024 && height == 2048)
-    ui_textures.insert (texId);
   }
 
-  glTexImage2D_Original ( target, level,
-                            internalformat,
-                              width, height,
-                                border,
-                                  format, type, 
-                                    data );
+
+  if ( data != nullptr ) {
+    //dll_log.Log ( L"texId: %lu, crc32: %x, Level: %li, target: %x, border: %lu, data: %ph",
+                   //texId, checksum, level, target, border, data );
+
+    if ( format != GL_COLOR_INDEX &&
+       PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                                internalformat,
+                                                  width,
+                                                    height,
+                                                      checksum,
+                                                        texId, (void *)data ) ) {
+      if (pp::RenderFix::tracer.log)
+        dll_log.Log (L"[GL SpeedUp] Avoided redundant texture upload...");
+      // Happy day! We just skipped a lot of framerate problems.
+      return;
+    } //else if (format == GL_COLOR_INDEX) {
+      //dll_log.Log (L"Removing texture because it is paletted");
+      //PPrinny_TEX_RemoveTextureRecord (texId);
+    //}
+  }
+
+  if (! depaletted) {
+    glTexImage2D_Original ( target, level,
+                              internalformat,
+                                width, height,
+                                  border,
+                                    format, type, 
+                                      data );
+
+    if ( data != nullptr ) {
+      GLuint cacheTexId;
+      glGenTextures (1, &cacheTexId);
+
+      PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                             internalformat,
+                                               width,
+                                                 height,
+                                                   checksum,
+                                                     cacheTexId, (void *)nullptr );
+
+      glBindTexture (GL_TEXTURE_2D, texId);
+    }
+  }
+
+  PPrinny_TEX_TestOpaque ( texId,
+                           width,          height,
+                           internalformat, format,
+                           data );
+
+
+  // Mipmap generation
+  if (config.textures.force_mipmaps) {
+    if ( data != nullptr && format != GL_COLOR_INDEX ) {
+      PPrinny_TEX_GenerateMipmap (width, height);
+      ////////dll_log.Log (L"[GL Texture] Generated mipmaps (on data upload) for Uncompressed TexID=%lu", texId);
+    }
+
+    if (format == GL_COLOR_INDEX) {
+      // DO NOT mipmap paletted textures
+      glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+      glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,  0);
+    }
+  } else {
+    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,  0);
+  }
+
+
+  // The game just re-allocated the depth texture, we need to attach the new texture for
+  //   FBO completeness...
+  if (texId == render_targets.depth) {
+    GLuint draw_buffer;
+
+    glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
+
+    // Create the MSAA Resolve FBO if necessary
+    if (config.render.msaa_samples > 1 && msaa.resolve_fbo == 0)
+      glGenFramebuffers (1, &msaa.resolve_fbo);
+
+    if (config.render.msaa_samples > 1)
+      glBindFramebuffer_Original    ( GL_FRAMEBUFFER, msaa.resolve_fbo );
+    else
+      glBindFramebuffer_Original    ( GL_FRAMEBUFFER, 2                );
+
+    glFramebufferTexture2D_Original ( GL_FRAMEBUFFER,
+                                        GL_DEPTH_ATTACHMENT,
+                                          GL_TEXTURE_2D,
+                                            texId,
+                                              0 );
+
+    glBindFramebuffer_Original      ( GL_FRAMEBUFFER, draw_buffer      );
+  }
 }
 
 __declspec (noinline)
@@ -1246,28 +2271,11 @@ glRenderbufferStorage_Detour (
   dll_log.Log ( L"[GL Surface]  >> Render Buffer - Internal Format: %s",
                   PP_GL_InternalFormat_ToStr (internalformat).c_str () );
 
-#if 0
-  if (internalformat == GL_DEPTH_COMPONENT)
-    internalformat = GL_DEPTH_COMPONENT24;
-#endif
-
-#if 0
-  if (internalformat == GL_RGB)
-    internalformat = GL_RGBA8;
-#endif
-
-
-  if (width == 1280 && height == 720) {
-    width = config.render.scene_res_x; height = config.render.scene_res_y;
+  if (width == game_width && height == game_height) {
+    width = fb_width; height = fb_height;
 
     msaa.createRenderbuffer (internalformat, width, height);
   }
-
-#if 0
-  if (width == 960 && height == 544) {
-    width = config.render.scene_res_x; height = config.render.scene_res_y;
-  }
-#endif
 
   glRenderbufferStorage_Original   (target, internalformat, width, height);
 }
@@ -1287,20 +2295,23 @@ glBlitFramebuffer_Detour (
   GLbitfield mask,
   GLenum     filter )
 {
-#if 0
-  dll_log.Log (L"[GL CallLog] -- glBlitFramebuffer (%li, %li, %li, %li, %li, %li, %li, %li, %li, %X, %X)",
-    srcX0, srcY0,
-    srcX1, srcY1,
-    dstX0, dstY0,
-    dstX1, dstY1,
-    mask, filter);
-#endif
+  if (pp::RenderFix::tracer.log) {
+    dll_log.Log (L"[GL CallLog] -- glBlitFramebuffer (%li, %li, %li, %li, %li,"
+                                                    L"%li, %li, %li, %li, %X)",
+      srcX0, srcY0,
+      srcX1, srcY1,
+      dstX0, dstY0,
+      dstX1, dstY1,
+      mask, filter);
+  }
 
+#if 0
   if (srcX0 == 0    && srcY0 ==   0 &&
       srcX1 == 1280 && srcY1 == 720) {
     srcX1 = config.render.scene_res_x;
     srcY1 = config.render.scene_res_y;
   }
+#endif
 
   return glBlitFramebuffer_Original (
     srcX0, srcY0,
@@ -1310,9 +2321,6 @@ glBlitFramebuffer_Detour (
     mask, filter
   );
 }
-
-int HAS_ARB_COPY_IMAGE = -1;
-glCopyImageSubData_pfn  glCopyImageSubData           = nullptr;
 
 __declspec (noinline)
 GLvoid
@@ -1336,39 +2344,22 @@ glCopyTexSubImage2D_Detour (
                           width, height );
    }
 
-   bool shadow = (width == 32   && height == 32)  ||
-                 (width == 1024 && height == 512) ||
-                 (width == 2048 && height == 2048);
+  // Post-processing (which is actually pre-processing at this point)
+  if (active_fbo == 2) {
+    postprocessing = true;
 
-  if (! shadow) {
-    GLuint texId;
-    glGetIntegerv (GL_TEXTURE_BINDING_2D, (GLint *)&texId);
+BEGIN_TASK_TIMING
+    if (GLPerf::timers [GLPerf::TASK_BEGIN_POSTPROC]->isReady ())
+      GLPerf::timers [GLPerf::TASK_BEGIN_POSTPROC]->requestTimestamp ();
+END_TASK_TIMING
 
-  // This has to be done every time the window changes resolution
-  if (true) {//texId != pp::RenderFix::draw_state.depth_tex) {
-    pp::RenderFix::draw_state.depth_tex = texId;
-
-    GLuint draw_buffer;
-
-    glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
-
-    if (config.render.msaa_samples > 1)
-      glBindFramebuffer_Original    (GL_FRAMEBUFFER, msaa.resolve_fbo);
-    else
-      glBindFramebuffer_Original    (GL_FRAMEBUFFER, 2);
-
-    glFramebufferTexture2D_Original (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, texId, 0);
-
-    glBindFramebuffer_Original (GL_FRAMEBUFFER, draw_buffer);
-  }
-
-    width  = config.render.scene_res_x;
-    height = config.render.scene_res_y;
+    width  = fb_width;
+    height = fb_height;
 
 // For Depth of Field to Work
 #if 1
     if (msaa.use)
-      msaa.resolveTexture (pp::RenderFix::draw_state.depth_tex);
+      msaa.resolveTexture (render_targets.depth);
 #endif
 
     // We don't need to make a copy, we attached this texture to the framebuffer
@@ -1376,31 +2367,23 @@ glCopyTexSubImage2D_Detour (
     return;
   }
 
-  switch (HAS_ARB_COPY_IMAGE)
-  {
-    case -1:
-    {
-      glCopyImageSubData = 
-        (glCopyImageSubData_pfn)
-          wglGetProcAddress ("glCopyImageSubData");
-      if (glCopyImageSubData != nullptr)
-        HAS_ARB_COPY_IMAGE = 1;
-      else
-        HAS_ARB_COPY_IMAGE = 0;
-    } //break;
-
-    case 0:
-    case 1:
-      //int internal_fmt;
-      //glGetTexLevelParameteriv (target, level, GL_TEXTURE_INTERNAL_FORMAT, &internal_fmt);
-      //dll_log.Log (L"[ GL Trace ] Destination internal format: 0x%X", internal_fmt);
-      glCopyTexSubImage2D_Original ( target, level,
-                                       xoffset, yoffset,
-                                         x, y,
-                                           width, height );
-      break;
-
+  // Shadow pass
+  if (active_fbo == 1) {
+#if 0
+    glCopyImageSubData ( 1,                     GL_RENDERBUFFER, 0, x, y, 0,
+                         render_targets.shadow, GL_TEXTURE_2D,   0, x, y, 0,
+                         width, height, 1 );
+    return;
+#endif
   }
+
+    //int internal_fmt;
+    //glGetTexLevelParameteriv (target, level, GL_TEXTURE_INTERNAL_FORMAT, &internal_fmt);
+    //dll_log.Log (L"[ GL Trace ] Destination internal format: 0x%X", internal_fmt);
+    glCopyTexSubImage2D_Original ( target, level,
+                                     xoffset, yoffset,
+                                       x, y,
+                                         width, height );
 }
 
 __declspec (noinline)
@@ -1425,21 +2408,14 @@ glViewport_Detour (GLint x, GLint y, GLsizei width, GLsizei height)
                     x, y,
                       width, height );
 
-  if ((width == 1280 && height == 720) /*||
-      (width == 960  && height == 544)*/) {
-    width  = config.render.scene_res_x;
-    height = config.render.scene_res_y;
+  if (width == game_width && height == game_height) {
+    width  = fb_width;
+    height = fb_height;
 
     drawing_main_scene = true;
   } else {
     drawing_main_scene = false;
   }
-
-#if 0
-  if (width == 1024 && height == 512) {
-    width = RES_X; height = RES_Y;
-*  }
-#endif
 
   glViewport_Original (x, y, width, height);
 }
@@ -1533,11 +2509,6 @@ glGetShaderiv_Detour ( GLuint shader,
   return glGetShaderiv_Original (shader, pname, params);
 }
 
-#define GL_SHADER_TYPE                      0x8B4F
-#define GL_FRAGMENT_SHADER                  0x8B30
-#define GL_VERTEX_SHADER                    0x8B31
-
-
 void
 PPrinny_DumpShader ( uint32_t    checksum,
                      GLuint      shader,
@@ -1613,12 +2584,35 @@ PPrinny_EvaluateShaderVariables (char* szInput)
 __declspec (noinline)
 GLvoid
 WINAPI
+glAttachShader_Detour ( GLuint program,
+                        GLuint shader )
+{
+// Only Program #33 writes to normal / position
+#if 0
+  if (shader == 16)
+    dll_log.Log ( L"[ GL MISC. ] Program %lu writes to gl_FragData [1] and gl_FragData [2]",
+                    program );
+#endif
+
+  glAttachShader_Original (program, shader);
+}
+
+__declspec (noinline)
+GLvoid
+WINAPI
 glShaderSource_Detour (        GLuint   shader,
                                GLsizei  count,
                         const GLubyte **string,
                         const  GLint   *length )
 {
   uint32_t checksum = crc32 (0x00, (const void *)*string, strlen ((const char *)*string));
+
+#if 0
+  if (checksum == 0x12C7A66D) {
+    dll_log.Log ( L"[ GL MISC. ] Shader %lu writes to gl_FragData [1] and gl_FragData [2]",
+                    shader );
+  }
+#endif
 
   PPrinny_DumpShader (checksum, shader, (const char *)*string);
 
@@ -1644,18 +2638,20 @@ glShaderSource_Detour (        GLuint   shader,
                     rewind (fShader);
 
       char* szSrc = (char *)malloc (size + 1);
-      szSrc [size] = '\0';
-      fread (szSrc, size, 1, fShader);
-      fclose (fShader);
+      if (szSrc != nullptr) {
+        szSrc [size] = '\0';
+        fread (szSrc, size, 1, fShader);
+        fclose (fShader);
 
-      szSrc = PPrinny_EvaluateShaderVariables (szSrc);
+        szSrc = PPrinny_EvaluateShaderVariables (szSrc);
 
-      glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
+        glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
 
-      free (szShaderSrc);
-      free (szSrc);
+        free (szShaderSrc);
+        free (szSrc);
 
-      return;
+        return;
+      }
     }
   }
 
@@ -1664,9 +2660,8 @@ glShaderSource_Detour (        GLuint   shader,
   free (szShaderSrc);
 }
 
-__declspec (noinline)
 PROC
-APIENTRY
+WINAPI
 wglGetProcAddress_Detour (LPCSTR szFuncName)
 {
   // Setup a VSYNC override immediately
@@ -1681,7 +2676,36 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
 
   static bool init_self = false;
 
-  if (! init_self) {
+  if (! init_self){
+    init_self = true;
+
+    if (pp::GLPerf::Init ()) {
+      GLPerf::timers [GLPerf::TASK_BEGIN_FRAME]    =
+                  new GLPerf::TimerQuery (L"Frame Start");
+      GLPerf::timers [GLPerf::TASK_BEGIN_SCENE]    =
+                  new GLPerf::TimerQuery (L"Scene");
+      GLPerf::timers [GLPerf::TASK_MSAA0]          =
+                  new GLPerf::TimerQuery (L"MSAA Resolve0");
+      GLPerf::timers [GLPerf::TASK_MSAA1]          =
+                  new GLPerf::TimerQuery (L"MSAA Resolve1");
+      GLPerf::timers [GLPerf::TASK_MSAA2]          =
+                  new GLPerf::TimerQuery (L"MSAA Resolve2");
+      GLPerf::timers [GLPerf::TASK_MSAA3]          =
+                  new GLPerf::TimerQuery (L"MSAA Resolve3");
+      GLPerf::timers [GLPerf::TASK_BEGIN_POSTPROC] =
+                  new GLPerf::TimerQuery (L"Post-Processing Start");
+      GLPerf::timers [GLPerf::TASK_END_POSTPROC]   =
+                  new GLPerf::TimerQuery (L"Post-Processing End");
+      GLPerf::timers [GLPerf::TASK_BEGIN_UI]       =
+                  new GLPerf::TimerQuery (L"UI Start");
+      GLPerf::timers [GLPerf::TASK_END_UI]         =
+                  new GLPerf::TimerQuery (L"UI End");
+      GLPerf::timers [GLPerf::TASK_END_FRAME]      =
+                  new GLPerf::TimerQuery (L"Frame End");
+
+      GLPerf::HAS_timer_query = true;
+    }
+
     glBindRenderbuffer =
       (glBindRenderbuffer_pfn)
         wglGetProcAddress_Original ("glBindRenderbuffer");
@@ -1718,7 +2742,50 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
       (glCheckFramebufferStatus_pfn)
         wglGetProcAddress_Original ("glCheckFramebufferStatus");
 
-    init_self = true;
+    glGenerateMipmap =
+      (glGenerateMipmap_pfn)
+        wglGetProcAddress_Original ("glGenerateMipmap");
+
+    glCopyImageSubData = 
+      (glCopyImageSubData_pfn)
+        wglGetProcAddress_Original ("glCopyImageSubData");
+
+    glTexStorage2D =
+      (glTexStorage2D_pfn)
+        wglGetProcAddress_Original ("glTexStorage2D");
+
+    glCompressedTexSubImage2D =
+      (glCompressedTexSubImage2D_pfn)
+        wglGetProcAddress_Original ("glCompressedTexSubImage2D");
+
+    glGenBuffers =
+      (glGenBuffers_pfn)
+        wglGetProcAddress_Original ("glGenBuffers");
+
+    glBindBuffer =
+      (glBindBuffer_pfn)
+        wglGetProcAddress_Original ("glBindBuffer");
+
+    glBufferData =
+      (glBufferData_pfn)
+        wglGetProcAddress_Original ("glBufferData");
+
+    glGetBufferSubData =
+      (glGetBufferSubData_pfn)
+        wglGetProcAddress_Original ("glGetBufferSubData");
+
+
+    glFenceSync =
+      (glFenceSync_pfn)
+        wglGetProcAddress ("glFenceSync");
+
+    glClientWaitSync =
+      (glClientWaitSync_pfn)
+        wglGetProcAddress ("glClientWaitSync");
+
+    glDeleteSync =
+      (glDeleteSync_pfn)
+        wglGetProcAddress ("glDeleteSync");
   }
 
   PROC ret = wglGetProcAddress_Original (szFuncName);
@@ -1731,99 +2798,111 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     detoured              = true;
   }
 
-  if (! strcmp (szFuncName, "glShaderSource") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glAttachShader") && (ret != nullptr)) {
+    glAttachShader_Original = (glAttachShader_pfn)ret;
+    ret                     = (PROC)glAttachShader_Detour;
+    detoured                = true;
+  }
+
+  else if (! strcmp (szFuncName, "glShaderSource") && (ret != nullptr)) {
     glShaderSource_Original = (glShaderSource_pfn)ret;
     ret                     = (PROC)glShaderSource_Detour;
     detoured                = true;
   }
 
-  if (! strcmp (szFuncName, "glGetShaderiv") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glGetShaderiv") && (ret != nullptr)) {
     glGetShaderiv_Original = (glGetShaderiv_pfn)ret;
     ret                    = (PROC)glGetShaderiv_Detour;
     detoured               = true;
   }
 
-  if (! strcmp (szFuncName, "glVertexAttrib4f") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glVertexAttrib4f") && (ret != nullptr)) {
     glVertexAttrib4f_Original = (glVertexAttrib4f_pfn)ret;
     ret                       = (PROC)glVertexAttrib4f_Detour;
     detoured                  = true;
   }
 
-  if (! strcmp (szFuncName, "glVertexAttrib4fv") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glVertexAttrib4fv") && (ret != nullptr)) {
     glVertexAttrib4fv_Original = (glVertexAttrib4fv_pfn)ret;
     ret                        = (PROC)glVertexAttrib4fv_Detour;
     detoured                   = true;
   }
 
-  if (! strcmp (szFuncName, "glCompressedTexImage2D") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glActiveTexture") && (ret != nullptr)) {
+    glActiveTexture_Original = (glActiveTexture_pfn)ret;
+    ret                      = (PROC)glActiveTexture_Detour;
+    detoured                 = true;
+  }
+
+  else if (! strcmp (szFuncName, "glCompressedTexImage2D") && (ret != nullptr)) {
     glCompressedTexImage2D_Original = (glCompressedTexImage2D_pfn)ret;
     ret                             = (PROC)glCompressedTexImage2D_Detour;
     detoured                        = true;
   }
 
 #if 0
-  if (! strcmp (szFuncName, "glUniformMatrix3fv") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glUniformMatrix3fv") && (ret != nullptr)) {
     glUniformMatrix3fv_Original = (glUniformMatrix3fv_pfn)ret;
     ret                         = (PROC)glUniformMatrix3fv_Detour;
     detoured                    = true;
   }
 
-  if (! strcmp (szFuncName, "glUniformMatrix4fv") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glUniformMatrix4fv") && (ret != nullptr)) {
     glUniformMatrix4fv_Original = (glUniformMatrix4fv_pfn)ret;
     ret                         = (PROC)glUniformMatrix4fv_Detour;
     detoured                    = true;
   }
 #endif
 
-  if (! strcmp (szFuncName, "glDrawBuffers") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glDrawBuffers") && (ret != nullptr)) {
     glDrawBuffers_Original = (glDrawBuffers_pfn)ret;
     ret                    = (PROC)glDrawBuffers_Detour;
     detoured               = true;
   }
 
-  if (! strcmp (szFuncName, "glBindFramebuffer") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glBindFramebuffer") && (ret != nullptr)) {
     glBindFramebuffer_Original = (glBindFramebuffer_pfn)ret;
     ret                        = (PROC)glBindFramebuffer_Detour;
     detoured                   = true;
   }
 
-  if (! strcmp (szFuncName, "glFramebufferTexture2D") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glFramebufferTexture2D") && (ret != nullptr)) {
     glFramebufferTexture2D_Original = (glFramebufferTexture2D_pfn)ret;
     ret                             = (PROC)glFramebufferTexture2D_Detour;
     detoured                        = true;
   }
 
-  if (! strcmp (szFuncName, "glFramebufferRenderbuffer") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glFramebufferRenderbuffer") && (ret != nullptr)) {
     glFramebufferRenderbuffer_Original = (glFramebufferRenderbuffer_pfn)ret;
     ret                                = (PROC)glFramebufferRenderbuffer_Detour;
     detoured                           = true;
   }
 
-  if (! strcmp (szFuncName, "glBlitFramebuffer") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glBlitFramebuffer") && (ret != nullptr)) {
     glBlitFramebuffer_Original = (glBlitFramebuffer_pfn)ret;
     ret                        = (PROC)glBlitFramebuffer_Detour;
     detoured                   = true;
   }
 
-  if (! strcmp (szFuncName, "glDeleteRenderbuffers") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glDeleteRenderbuffers") && (ret != nullptr)) {
     glDeleteRenderbuffers_Original = (glDeleteRenderbuffers_pfn)ret;
     ret                            = (PROC)glDeleteRenderbuffers_Detour;
     detoured                       = true;
   }
 
-  if (! strcmp (szFuncName, "glRenderbufferStorage") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "glRenderbufferStorage") && (ret != nullptr)) {
     glRenderbufferStorage_Original = (glRenderbufferStorage_pfn)ret;
     ret                            = (PROC)glRenderbufferStorage_Detour;
     detoured                       = true;
   }
 
-  if (! strcmp (szFuncName, "wglSwapIntervalEXT") && (ret != nullptr)) {
+  else if (! strcmp (szFuncName, "wglSwapIntervalEXT") && (ret != nullptr)) {
     wglSwapIntervalEXT_Original = (wglSwapIntervalEXT_pfn)ret;
     ret                         = (PROC)wglSwapIntervalEXT_Detour;
     detoured                    = true;
   }
 
-  if (! strcmp (szFuncName, "glDebugMessageCallbackARB") && ret != nullptr) {
+  else if (! strcmp (szFuncName, "glDebugMessageCallbackARB") && ret != nullptr) {
     extern void PP_Init_glDebug (void);
     PP_Init_glDebug ();
 
@@ -1840,6 +2919,8 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
 
   return ret;
 }
+
+wglGetProcAddress_pfn wglGetProcAddress_Log = wglGetProcAddress_Detour;
 
 __declspec (noinline)
 GLvoid
@@ -1934,6 +3015,17 @@ glScalef_Detour ( GLfloat x,
   glScalef_Original (x, y, z);
 }
 
+
+GLvoid
+WINAPI
+glClear_Detour (GLbitfield mask)
+{
+  //if (active_fbo == 1)
+  mask &= ~(GL_STENCIL_BUFFER_BIT);
+
+  glClear_Original (mask);
+}
+
 LPVOID lpvDontCare = nullptr;
 
 BOOL
@@ -1997,16 +3089,6 @@ HGLRC
 WINAPI
 wglCreateContext_Detour (HDC hDC)
 {
-#define WGL_CONTEXT_MAJOR_VERSION_ARB             0x2091
-#define WGL_CONTEXT_MINOR_VERSION_ARB             0x2092
-#define WGL_CONTEXT_FLAGS_ARB                     0x2094
-#define WGL_CONTEXT_PROFILE_MASK_ARB              0x9126
-
-#define WGL_CONTEXT_DEBUG_BIT_ARB                 0x0001
-#define WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB    0x0002
-
-#define WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB 0x0002
-
   if ((! config.compatibility.support_old_drivers) && wglCreateContextAttribsARB != nullptr) {
     GLint debug_bits = config.compatibility.debug_mode ? WGL_CONTEXT_DEBUG_BIT_ARB : 0;
 
@@ -2068,8 +3150,13 @@ wglCopyContext_Detour ( HGLRC hglrcSrc,
   return wglCopyContext_Original (hglrcSrc, hglrcDst, mask);
 }
 
+#ifdef RESPONSIBLE_CTX_MGMT
 __declspec (thread) HDC   current_dc;
 __declspec (thread) HGLRC current_glrc;
+#else
+HDC   current_dc;
+HGLRC current_glrc;
+#endif
 
 __declspec (noinline)
 BOOL
@@ -2086,7 +3173,11 @@ wglMakeCurrent_Detour ( HDC   hDC,
                     //hGLRC,
                       //GetCurrentThreadId () );
 
+#ifdef RESPONSIBLE_CTX_MGMT
   if (current_dc != hDC/* || current_glrc != hGLRC*/) {
+#else
+  if (current_dc != hDC || current_glrc != hGLRC) {
+#endif
     if (wglMakeCurrent_Original (hDC, hGLRC)) {
       current_dc   = hDC;
       current_glrc = hGLRC;
@@ -2117,6 +3208,16 @@ PP_InitGLHooks (void)
                               "BMF_EndBufferSwap",
                                OGLEndFrame_Post,
                      (LPVOID*)&BMF_EndBufferSwap );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glPixelMapfv",
+                              glPixelMapfv_Detour,
+                   (LPVOID *)&glPixelMapfv_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glPixelTransferi",
+                              glPixelTransferi_Detour,
+                   (LPVOID *)&glPixelTransferi_Original );
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "glDeleteTextures",
@@ -2154,6 +3255,11 @@ PP_InitGLHooks (void)
                    (LPVOID *)&glViewport_Original );
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glClear",
+                              glClear_Detour,
+                   (LPVOID *)&glClear_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "glFlush",
                               glFlush_Detour,
                    (LPVOID *)&glFlush_Original );
@@ -2188,6 +3294,11 @@ PP_InitGLHooks (void)
                               "glAlphaFunc",
                                glAlphaFunc_Detour,
                     (LPVOID *)&glAlphaFunc_Original );
+
+      PPrinny_CreateDLLHook ( config.system.injector.c_str (),
+                              "glDepthMask",
+                               glDepthMask_Detour,
+                    (LPVOID *)&glDepthMask_Original );
 
       // It sucks to have to hook THESE functions, but there are display lists
       //   that have wrong state setup.
@@ -2408,6 +3519,10 @@ pp::RenderFix::Init (void)
 
   pCommandProc->AddVariable ("Render.ConservativeMSAA", new eTB_VarStub <bool> (&config.render.conservative_msaa));
   pCommandProc->AddVariable ("Render.EarlyResolve",     new eTB_VarStub <bool> (&msaa.early_resolve));
+
+  pCommandProc->AddVariable ("Render.AggressiveOpt",    new eTB_VarStub <bool> (&aggressive_optimization));
+  pCommandProc->AddVariable ("Render.TaskTiming",       new eTB_VarStub <bool> (&GLPerf::time_tasks));
+  pCommandProc->AddVariable ("Render.FastTexUploads",   new eTB_VarStub <bool> (&config.textures.caching));
 }
 
 void
@@ -2422,7 +3537,14 @@ pp::RenderFix::CommandProcessor::CommandProcessor (void)
   eTB_CommandProcessor* pCommandProc =
     SK_GetCommandProcessor ();
 
-  pCommandProc->AddVariable ("Render.AllowBG",   new eTB_VarStub <bool>  (&config.render.allow_background));
+// NOT IMPLEMENTED IN THIS GAME (Yet?)
+#if 0
+  pCommandProc->AddVariable ( "Render.AllowBG",
+                                new eTB_VarStub <bool> (
+                                  &config.render.allow_background
+                                )
+                            );
+#endif
 
   high_precision_ssao =
     new eTB_VarStub <bool> (&config.render.high_precision_ssao, this);
@@ -2468,11 +3590,11 @@ HMODULE  pp::RenderFix::user32_dll       = 0;
 
 
 
-
-
-
 bool
-MSAABackend::createTexture (GLuint texId, GLenum internalformat, GLsizei width, GLsizei height)
+MSAABackend::createTexture ( GLuint  texId,
+                             GLenum  internalformat,
+                             GLsizei width,
+                             GLsizei height )
 {
   if (config.render.msaa_samples < 2)
     return false;
@@ -2692,10 +3814,20 @@ MSAABackend::attachRenderbuffer (GLenum target, GLenum attachment, GLuint render
 
     glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, resolve_fbo);
 
-    glFramebufferRenderbuffer_Original ( target,
-                                           attachment,
-                                             GL_RENDERBUFFER,
-                                               renderbuffer );
+    // Only attach an RBO if it's a color buffer, we will use a depth texture
+    //   otherwise to save a copy operation
+    if (it->second->color_loc != -1) {
+      glFramebufferRenderbuffer_Original ( target,
+                                             attachment,
+                                               GL_RENDERBUFFER,
+                                                 renderbuffer );
+    } else {
+      glFramebufferTexture2D_Original ( target,
+                                          attachment,
+                                            GL_TEXTURE_2D,
+                                              render_targets.depth,
+                                                0 );
+    }
 
     glBindFramebuffer_Original (GL_DRAW_FRAMEBUFFER, fbo);
 
@@ -2716,8 +3848,7 @@ bool
 PP_ChangePositionFormat (GLenum format)
 {
   if (render_targets.position != GL_NONE) {
-    GLuint texId;
-    glGetIntegerv (GL_TEXTURE_BINDING_2D, (GLint *)&texId);
+    GLuint texId = current_textures [active_texture].tex2d.name;
 
     glBindTexture (GL_TEXTURE_2D, render_targets.position);
 
@@ -2729,13 +3860,13 @@ PP_ChangePositionFormat (GLenum format)
       msaa.createTexture (render_targets.position, format, width, height);
 
     // This will orphan the old data store after any queued frames finish
-    glTexImage2D_Detour ( GL_TEXTURE_2D,
-                            0,
-                              format,
-                                width, height,
-                                  0,
-                                    GL_RGB, GL_FLOAT,
-                                      nullptr );
+    glTexImage2D_Original ( GL_TEXTURE_2D,
+                              0,
+                                format,
+                                  width, height,
+                                    0,
+                                      GL_RGB, GL_FLOAT,
+                                        nullptr );
 
     glBindTexture (GL_TEXTURE_2D, texId);
 

@@ -53,6 +53,8 @@ EnumDisplaySettingsA_Detour ( _In_  LPCSTR    lpszDeviceName,
     if (iModeNum == 0)
       return EnumDisplaySettingsA_Original (lpszDeviceName, ENUM_CURRENT_SETTINGS, lpDevMode);
 
+    EnumDisplaySettingsA_Original (lpszDeviceName, ENUM_CURRENT_SETTINGS, lpDevMode);
+
     return 0;
   }
 
@@ -140,6 +142,15 @@ ChangeDisplaySettingsA_Detour (DEVMODEA* dontcare, DWORD dwFlags)
                                          NULL,
                                            dwFlags,
                                              nullptr );
+
+#if 0
+       DEVMODEA settings;
+       settings.dmSize = sizeof DEVMODEA;
+       EnumDisplaySettingsExA (dev.DeviceName,
+                               ENUM_CURRENT_SETTINGS,
+                               &settings,
+                               EDS_ROTATEDMODE);
+#endif
       }
     }
 
@@ -178,8 +189,29 @@ GetSystemMetrics_Detour (_In_ int nIndex)
   if (config.display.height > 0 && nIndex == SM_CYSCREEN)
     return config.display.height;
 
-//  dll_log.Log ( L"[Resolution] GetSystemMetrics (0x%04X) : %lu",
-//                  nIndex, nRet );
+  if (config.display.width > 0 && nIndex == SM_CXFULLSCREEN) {
+    return config.display.width;
+  }
+
+  if (config.display.height > 0 && nIndex == SM_CYFULLSCREEN) {
+    return config.display.height;
+  }
+
+  if (config.window.borderless) {
+    if (nIndex == SM_CYCAPTION)
+      return 0;
+    if (nIndex == SM_CXBORDER)
+      return 0;
+    if (nIndex == SM_CYBORDER)
+      return 0;
+    if (nIndex == SM_CXDLGFRAME)
+      return 0;
+    if (nIndex == SM_CYDLGFRAME)
+      return 0;
+  }
+
+  //dll_log.Log ( L"[Resolution] GetSystemMetrics (0x%04X) : %lu",
+                  //nIndex, nRet );
 
   return nRet;
 }

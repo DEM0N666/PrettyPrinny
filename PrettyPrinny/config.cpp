@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.4.0";
+std::wstring PPRINNY_VER_STR = L"0.4.3";
 pp_config_s config;
 
 struct {
@@ -74,7 +74,10 @@ struct {
 
 struct {
   pp::ParameterBool*    dump;
+  pp::ParameterBool*    force_mipmaps;
+  pp::ParameterInt*     pixelate;
   //pp::ParameterInt*     max_anisotropy;
+  pp::ParameterBool*    fast_uploads;
 } textures;
 
 struct {
@@ -379,6 +382,36 @@ PPrinny_LoadConfig (std::wstring name) {
       L"PrettyPrinny.Textures",
         L"Dump" );
 
+  textures.force_mipmaps =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Force Mipmap Generation")
+      );
+  textures.force_mipmaps->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Textures",
+        L"ForceMipmaps" );
+
+  textures.pixelate =
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
+        L"Force Mipmap Generation")
+      );
+  textures.pixelate->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Textures",
+        L"Pixelate" );
+
+  textures.fast_uploads =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Fast Path for Modern Hardware")
+      );
+  textures.fast_uploads->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Textures",
+        L"VRAMCaching" );
+
 
   colors.blue_text =
     static_cast <pp::ParameterStringW *>
@@ -571,6 +604,15 @@ PPrinny_LoadConfig (std::wstring name) {
   if (textures.dump->load ())
     config.textures.dump = textures.dump->get_value ();
 
+  if (textures.force_mipmaps->load ())
+    config.textures.force_mipmaps = textures.force_mipmaps->get_value ();
+
+  // This cannot be used right now
+  config.textures.force_mipmaps = false;
+
+  if (textures.pixelate->load ())
+    config.textures.pixelate = textures.pixelate->get_value ();
+
 
 
   if (window.borderless->load ())
@@ -624,6 +666,9 @@ PPrinny_LoadConfig (std::wstring name) {
     config.colors.red_text.b = (float)(b & 0xFF) / 255.0f;
   }
 
+
+  if (textures.fast_uploads->load ())
+    config.textures.caching = textures.fast_uploads->get_value ();
 
 //  if (textures.log->load ())
 //    config.textures.log = textures.log->get_value ();
@@ -737,11 +782,8 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   compatibility.bypass_intel_gl->store ();
 
 
-
-#if 0
   window.borderless->set_value        (config.window.borderless);
   window.borderless->store            ();
-#endif
 
 #if 0
   window.foreground_fps->set_value    (config.window.foreground_fps);
@@ -776,6 +818,15 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
 
   textures.dump->set_value           (config.textures.dump);
   textures.dump->store               ();
+
+  textures.force_mipmaps->set_value  (config.textures.force_mipmaps);
+  textures.force_mipmaps->store      ();
+
+  textures.pixelate->set_value       (config.textures.pixelate);
+  textures.pixelate->store           ();
+
+  textures.fast_uploads->set_value   (config.textures.caching);
+  textures.fast_uploads->store       ();
 
 //  textures.log->set_value            (config.textures.log);
 //  textures.log->store                ();

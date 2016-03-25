@@ -227,3 +227,137 @@ PPrinny_InitCompatBlacklist (void)
     FreeLibrary (GetModuleHandleW (L"fraps.dll"));
   }
 }
+
+LPVOID lpvDamageHook = nullptr;
+
+__declspec (naked)
+void
+PP_DamageCrashHandler (void)
+{
+  // Bail-out if we were returned a NULL pointer
+  __asm {
+    cmp esi,0
+    jne ALL_GOOD
+    pop edi
+    pop esi
+    pop ebx
+    mov esp,ebp
+    pop ebp
+    ret 
+
+    // Otherwise, resume normal operation
+ALL_GOOD:
+    jmp lpvDamageHook
+  }
+}
+
+#if 0
+typedef void* (__cdecl *memcpy_pfn)(
+  _Out_writes_bytes_all_(_Size) void* _Dst,
+  _In_reads_bytes_(_Size)       void const* _Src,
+  _In_                          size_t      _Size
+);
+
+memcpy_pfn memcpy_Original = nullptr;
+
+__declspec (nothrow, noinline)
+void*
+__cdecl
+memcpy_Detour (void* _Dst, void const* _Src, size_t _Size)
+{
+  if (_Dst == nullptr)
+    return (void *)_Src;
+
+  if (_Src == nullptr)
+    return _Dst;
+
+  return memcpy_Original (_Dst, _Src, _Size);
+}
+#endif
+
+#if 0
+typedef void* (__cdecl *memccpy_pfn)(
+        _Out_writes_bytes_opt_(_Size) void*       _Dst,
+        _In_reads_bytes_opt_(_Size)   void const* _Src,
+        _In_                          int         _Val,
+        _In_                          size_t      _Size
+);
+
+memccpy_pfn memccpy_Original = nullptr;
+
+__declspec (nothrow, noinline, naked)
+void*
+__cdecl
+memccpy_Detour ( _Out_writes_bytes_opt_(_Size) void*       _Dst,
+                 _In_reads_bytes_opt_(_Size)   void const* _Src,
+                 _In_                          int         _Val,
+                 _In_                          size_t      _Size)
+{
+  if (_Dst == nullptr && _Size > 0) {
+    dll_log.Log (L"[Damage Fix] Sanity check failure (_Dst == nullptr)!");
+    fflush (dll_log.fLog);
+    return nullptr;//memccpy_Original ((void *)_Dst, _Src, _Val, _Size);//(void *)_Dst;
+  }
+
+//  if (_Src == nullptr) {
+//    dll_log.Log (L"[Damage Fix] Sanity check failure (_Src == nullptr)!");
+//    return _Dst;
+//  }
+
+//  dll_log.Log (L"[Damage Fix] Sanity check success!");
+
+  return memccpy_Original (_Dst, _Src, _Val, _Size);
+}
+#endif
+
+//typedef __cdecl
+bool
+PPrinny_PatchDamageCrash (void)
+{
+  return true;
+
+  intptr_t dwCrashAddr = 0x00EECA45;
+
+  dll_log.LogEx ( true, L"[Damage Fix] Patching executable (addr=%Xh)... ",
+                          dwCrashAddr );
+
+  PPrinny_CreateFuncHook ( L"NISA_Damage_Crash",
+                             (LPVOID)dwCrashAddr,
+                               PP_DamageCrashHandler,
+                                 &lpvDamageHook );
+  PPrinny_EnableHook ((LPVOID)dwCrashAddr);
+
+  dll_log.LogEx ( false, L"done!\n");
+
+#if 0
+#if 0
+  dll_log.LogEx ( true, L"[Damage Fix] Adding sanity checks to msvcr120.memcpy ()... ",
+                          dwCrashAddr );
+
+  PPrinny_CreateDLLHook ( L"msvcr120.dll",
+                           "memcpy",
+                            memcpy_Detour,
+                  (LPVOID *)&memcpy_Original );
+#else
+  intptr_t memccpy_entry =
+    (intptr_t)GetProcAddress (
+      GetModuleHandle (L"msvcr120.dll"),
+        "_memccpy" );
+
+  memccpy_entry += 0xB3;
+
+  dll_log.LogEx ( true, L"[Damage Fix] Adding sanity checks to msvcr120._memccpy (_Dst,_Src,_Val,_Size)... ",
+                          dwCrashAddr );
+
+  PPrinny_CreateFuncHook ( L"_memccpy.fast",
+                    (LPVOID)memccpy_entry,
+                            memccpy_Detour,
+                  (LPVOID *)&memccpy_Original );
+  PPrinny_EnableHook ((LPVOID)memccpy_entry);
+#endif
+
+  dll_log.LogEx ( false, L"done!\n");
+#endif
+
+  return true;
+}

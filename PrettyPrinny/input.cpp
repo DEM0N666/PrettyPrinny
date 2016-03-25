@@ -1007,6 +1007,7 @@ pp::InputManager::Hooker::End (void)
 }
 
 std::string console_text;
+std::string mod_text ("");
 
 void
 pp::InputManager::Hooker::Draw (void)
@@ -1045,6 +1046,9 @@ pp::InputManager::Hooker::Draw (void)
   }
 
   console_text = output;
+
+  output += "\n";
+  output += mod_text;
 
   BMF_DrawExternalOSD ("Pretty Prinny", output.c_str ());
 }
@@ -1308,6 +1312,14 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
           ui_clamp = (! ui_clamp);
         }
 
+        else if (vkCode == 'Z' && new_press) {
+          pCommandProc->ProcessCommandLine ("Render.TaskTiming toggle");
+        }
+
+        else if (vkCode == 'X' && new_press) {
+          pCommandProc->ProcessCommandLine ("Render.AggressiveOpt toggle");
+        }
+
         else if (vkCode == '1' && new_press) {
           pCommandProc->ProcessCommandLine ("Window.ForegroundFPS 60.0");
         }
@@ -1335,7 +1347,8 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
                               keys_,
                             (LPWORD)key_str,
                               0,
-                              GetKeyboardLayout (0) )) {
+                              GetKeyboardLayout (0) ) &&
+             isprint (*key_str) ) {
           strncat (text, key_str, 1);
           command_issued = false;
         }
