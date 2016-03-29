@@ -228,6 +228,156 @@ PPrinny_InitCompatBlacklist (void)
   }
 }
 
+void*
+PP_Scan (uint8_t* pattern, size_t len, uint8_t* mask)
+{
+  uint8_t* base_addr = (uint8_t *)GetModuleHandle (nullptr);
+
+  MEMORY_BASIC_INFORMATION mem_info;
+  VirtualQuery (base_addr, &mem_info, sizeof mem_info);
+
+  //
+  // VMProtect kills this, so let's do something else...
+  //
+#ifdef VMPROTECT_IS_NOT_A_FACTOR
+  IMAGE_DOS_HEADER* pDOS =
+    (IMAGE_DOS_HEADER *)mem_info.AllocationBase;
+  IMAGE_NT_HEADERS* pNT  =
+    (IMAGE_NT_HEADERS *)((intptr_t)(pDOS + pDOS->e_lfanew));
+
+  uint8_t* end_addr = base_addr + pNT->OptionalHeader.SizeOfImage;
+#else
+           base_addr = (uint8_t *)mem_info.BaseAddress;//AllocationBase;
+  uint8_t* end_addr  = (uint8_t *)mem_info.BaseAddress + mem_info.RegionSize;
+
+  if (base_addr != (uint8_t *)0x400000) {
+    dll_log.Log ( L"[ Sig Scan ] Expected module base addr. 40000h, but got: %ph",
+                    base_addr );
+  }
+
+  int pages = 0;
+
+// Scan up to 32 MiB worth of data
+#define PAGE_WALK_LIMIT (base_addr) + (1 << 26)
+
+  //
+  // For practical purposes, let's just assume that all valid games have less than 32 MiB of
+  //   committed executable image data.
+  //
+  while (VirtualQuery (end_addr, &mem_info, sizeof mem_info) && end_addr < PAGE_WALK_LIMIT) {
+    if (mem_info.Protect & PAGE_NOACCESS || (! (mem_info.Type & MEM_IMAGE)))
+      break;
+
+    pages += VirtualQuery (end_addr, &mem_info, sizeof mem_info);
+
+    end_addr = (uint8_t *)mem_info.BaseAddress + mem_info.RegionSize;
+  }
+
+  if (end_addr > PAGE_WALK_LIMIT) {
+    dll_log.Log ( L"[ Sig Scan ] Module page walk resulted in end addr. out-of-range: %ph",
+                    end_addr );
+    dll_log.Log ( L"[ Sig Scan ]  >> Restricting to %ph",
+                    PAGE_WALK_LIMIT );
+    end_addr = PAGE_WALK_LIMIT;
+  }
+
+  dll_log.Log ( L"[ Sig Scan ] Module image consists of %lu pages, from %ph to %ph",
+                  pages,
+                    base_addr,
+                      end_addr );
+#endif
+
+  uint8_t*  begin = (uint8_t *)base_addr;
+  uint8_t*  it    = begin;
+  int       idx   = 0;
+
+  while (it < end_addr)
+  {
+    VirtualQuery (it, &mem_info, sizeof mem_info);
+
+    // Bail-out once we walk into an address range that is not resident, because
+    //   it does not belong to the original executable.
+    if (mem_info.RegionSize == 0)
+      break;
+
+    uint8_t* next_rgn =
+     (uint8_t *)mem_info.BaseAddress + mem_info.RegionSize;
+
+    if ( (! (mem_info.Type    & MEM_IMAGE))  ||
+         (! (mem_info.State   & MEM_COMMIT)) ||
+             mem_info.Protect & PAGE_NOACCESS ) {
+      it    = next_rgn;
+      idx   = 0;
+      begin = it;
+      continue;
+    }
+
+    // Do not search past the end of the module image!
+    if (next_rgn >= end_addr)
+      break;
+
+    while (it < next_rgn) {
+      uint8_t* scan_addr = it;
+
+      bool match = (*scan_addr == pattern [idx]);
+
+      // For portions we do not care about... treat them
+      //   as matching.
+      if (mask != nullptr && (! mask [idx]))
+        match = true;
+
+      if (match) {
+        if (++idx == len)
+          return (void *)begin;
+
+        ++it;
+      }
+
+      else {
+        // No match?!
+        if (it > end_addr - len)
+          break;
+
+        it  = ++begin;
+        idx = 0;
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+void
+PP_FlushInstructionCache ( LPCVOID base_addr,
+                           size_t  code_size )
+{
+  FlushInstructionCache ( GetCurrentProcess (),
+                            base_addr,
+                              code_size );
+}
+
+void
+PP_InjectMachineCode ( LPVOID   base_addr,
+                       uint8_t* new_code,
+                       size_t   code_size,
+                       DWORD    permissions,
+                       uint8_t* old_code = nullptr )
+{
+  DWORD dwOld;
+
+  if (VirtualProtect (base_addr, code_size, permissions, &dwOld))
+  {
+    if (old_code != nullptr)
+      memcpy (old_code, base_addr, code_size);
+
+    memcpy (base_addr, new_code, code_size);
+
+    VirtualProtect (base_addr, code_size, dwOld, &dwOld);
+
+    PP_FlushInstructionCache (base_addr, code_size);
+  }
+}
+
 LPVOID lpvDamageHook = nullptr;
 
 __declspec (naked)
@@ -236,18 +386,21 @@ PP_DamageCrashHandler (void)
 {
   // Bail-out if we were returned a NULL pointer
   __asm {
-    cmp esi,0
-    jne ALL_GOOD
+    //pushad
+    //cmp esi,0
+    //jne ALL_GOOD
+    //popad
     pop edi
     pop esi
     pop ebx
     mov esp,ebp
     pop ebp
-    ret 
+    ret
 
     // Otherwise, resume normal operation
-ALL_GOOD:
-    jmp lpvDamageHook
+//ALL_GOOD:
+  //  popad
+//    jmp lpvDamageHook
   }
 }
 
@@ -314,9 +467,16 @@ memccpy_Detour ( _Out_writes_bytes_opt_(_Size) void*       _Dst,
 bool
 PPrinny_PatchDamageCrash (void)
 {
-  return true;
+  if (! config.compatibility.patch_damage_bug)
+    return true;
 
-  intptr_t dwCrashAddr = 0x00EECA45;
+  uint8_t sig  [] = { 0x8B, 0xF0, 0xFF, 0x15, 00, 00, 00, 00, 0xD9 };
+  uint8_t mask [] = { 0xFF, 0xFF, 0xFF, 0xFF, 00, 00, 00, 00, 0xFF };
+
+  intptr_t dwCrashAddr =
+    (intptr_t)PP_Scan (sig, sizeof (sig), mask);//0x00DCCEED;//0x00EECA45;
+
+  dwCrashAddr += sizeof (sig) - 1;
 
   dll_log.LogEx ( true, L"[Damage Fix] Patching executable (addr=%Xh)... ",
                           dwCrashAddr );

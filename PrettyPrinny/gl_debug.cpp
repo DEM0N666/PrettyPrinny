@@ -87,6 +87,17 @@ PP_GL_ERROR_CALLBACK (GLenum        source,
                       const GLchar* message,
                       GLvoid*       userParam)
 {
+  //
+  // On Intel Drivers: 0x08 = Redundant FBO bind
+  //                   0x09 = Redundant RBO bind
+  //
+  const GLuint ignored [] = { 0x08, 0x09 };
+
+  for (int i = 0; i < sizeof (ignored) / sizeof (GLuint); i++) {
+    if (id == ignored [i])
+      return;
+  }
+
   dll_log.LogEx (false, L"\n");
 
   dll_log.Log (L"[ GL Debug ] OpenGL Error:");

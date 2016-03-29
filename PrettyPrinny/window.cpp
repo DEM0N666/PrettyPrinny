@@ -207,28 +207,30 @@ SetWindowLongA_Detour (
     else
       windowed = false;
 
-    SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_STYLE,   WS_POPUP | WS_MINIMIZEBOX);
-    SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_EXSTYLE, WS_EX_APPWINDOW);
+    if (config.window.borderless) {
+      SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_STYLE,   WS_POPUP | WS_MINIMIZEBOX);
+      SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_EXSTYLE, WS_EX_APPWINDOW);
 
-        HMONITOR hMonitor = 
-          MonitorFromWindow ( pp::RenderFix::hWndDevice,
-                              MONITOR_DEFAULTTONEAREST );
+      HMONITOR hMonitor = 
+        MonitorFromWindow ( pp::RenderFix::hWndDevice,
+                            MONITOR_DEFAULTTONEAREST );
 
-        MONITORINFO mi = { 0 };
-        mi.cbSize      = sizeof (mi);
+      MONITORINFO mi = { 0 };
+      mi.cbSize      = sizeof (mi);
 
-        GetMonitorInfo (hMonitor, &mi);
+      GetMonitorInfo (hMonitor, &mi);
 
-        SetWindowPos/*_Original*/ ( pp::RenderFix::hWndDevice,
-                                 HWND_TOP,
-                                  mi.rcMonitor.left,
-                                  mi.rcMonitor.top,
-                                    mi.rcMonitor.right  - mi.rcMonitor.left,
-                                    mi.rcMonitor.bottom - mi.rcMonitor.top,
-                                      SWP_FRAMECHANGED | SWP_NOSENDCHANGING );
+      SetWindowPos/*_Original*/ ( pp::RenderFix::hWndDevice,
+                               HWND_TOP,
+                                mi.rcMonitor.left,
+                                mi.rcMonitor.top,
+                                  mi.rcMonitor.right  - mi.rcMonitor.left,
+                                  mi.rcMonitor.bottom - mi.rcMonitor.top,
+                                    SWP_FRAMECHANGED | SWP_NOSENDCHANGING );
+    }
 
-        windowed = false;
-        DwmEnableMMCSS (TRUE);
+    windowed = false;
+    DwmEnableMMCSS (TRUE);
 
     return dwNewLong;
   }

@@ -72,10 +72,12 @@ typedef struct {
 
 #include <gl/GL.h>
 
-#define GL_COMPRESSED_RGB_S3TC_DXT1_EXT                   0x83F0
-#define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT                  0x83F1
-#define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT                  0x83F2
-#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT                  0x83F3
+#define GL_BGRA                            GL_BGRA_EXT
+
+#define GL_COMPRESSED_RGB_S3TC_DXT1_EXT    0x83F0
+#define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT   0x83F1
+#define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT   0x83F2
+#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT   0x83F3
 
 #include <cstdio>
 
@@ -177,47 +179,23 @@ PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
 }
 
 void
-PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
-                                   GLint    level,
-                                   GLenum   format,
-                                   GLsizei  width,
-                                   GLsizei  height,
-
-                                   GLsizei  imageSize,
-                             const GLvoid*  data )
+PPrinny_WriteUncompressedDDS ( GLenum  format,
+                               GLsizei  width,
+                               GLsizei  height,
+                               GLsizei  imageSize,
+                         const GLvoid*  data,
+                         const wchar_t* wszOutFile )
 {
-  if (GetFileAttributes (L"dump") == INVALID_FILE_ATTRIBUTES)
-    CreateDirectoryW (L"dump", nullptr);
-
-  wchar_t wszOutName [MAX_PATH];
-
-  if (format != GL_COLOR_INDEX)
-    wsprintf ( wszOutName, L"dump\\textures\\Uncompressed_%lu_%X.dds",
-                 level, crc32 );
-  else
-    wsprintf ( wszOutName, L"dump\\textures\\Paletted_%lu_%X.dds",
-                 level, crc32 );
-
-  // Early-Out if the texutre was already dumped.
-  if (GetFileAttributes (wszOutName) != INVALID_FILE_ATTRIBUTES)
-    return;
-
   DDS_PIXELFORMAT dds_fmt = { 0 };
   DDS_HEADER      dds_hdr = { 0 };
 
   dds_fmt.dwSize = sizeof DDS_PIXELFORMAT;
 
   switch (format) {
-    case GL_BGRA_EXT:
+    case GL_BGRA:
       //dll_log.Log (L"[ Tex Dump ] RGBA");
 
       dds_fmt.dwRGBBitCount = 32;
-      /*
-      dds_fmt.dwABitMask    = 0xff000000;
-      dds_fmt.dwRBitMask    = 0x000000ff;
-      dds_fmt.dwGBitMask    = 0x0000ff00;
-      dds_fmt.dwBBitMask    = 0x00ff0000;
-      */
       dds_fmt.dwABitMask    = 0xff000000;
       dds_fmt.dwRBitMask    = 0x00ff0000;
       dds_fmt.dwGBitMask    = 0x0000ff00;
@@ -231,16 +209,11 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
     case GL_COLOR_INDEX:
       dds_fmt.dwRGBBitCount = 8;
 
-#if 0
-      dds_fmt.dwABitMask    = 0xff;
-      dds_fmt.dwFlags      |= DDPF_ALPHA;
-#else
       dds_fmt.dwRBitMask    = 0xFF;
       dds_fmt.dwGBitMask    = 0x00;
       dds_fmt.dwBBitMask    = 0x00;
       dds_fmt.dwABitMask    = 0x00;
       dds_fmt.dwFlags      |= DDPF_LUMINANCE;
-#endif
 
       dds_hdr.dwPitchOrLinearSize = (width * 8 + 7) / 8;
       break;
@@ -260,7 +233,7 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
 
   memcpy (&dds_hdr.ddspf, &dds_fmt, sizeof DDS_PIXELFORMAT);
 
-  FILE *fOut = _wfopen (wszOutName, L"wb+");
+  FILE *fOut = _wfopen (wszOutFile, L"wb+");
 
   if (fOut != nullptr) {
     fwrite ("DDS ", 4,                             1, fOut);
@@ -268,6 +241,142 @@ PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
     fwrite (        data,       imageSize,         1, fOut);
     fclose (fOut);
   }
+}
+
+#include <memory>
+
+std::unique_ptr <uint8_t*>
+PPrinny_TEX_ConvertPalettedToBGRA ( GLsizei  width,
+                                    GLsizei  height,
+                                    GLfloat* palette,
+                              const GLvoid*  data )
+{
+  uint8_t* out_img =
+    new uint8_t [width * height * 4];
+
+  for (int i = 0, j = 0 ; j < width * height ; j++, i += 4) {
+    out_img [ i + 2 ] = 255 * palette [000 + ((uint8_t *)data) [j]];
+    out_img [ i + 1 ] = 255 * palette [256 + ((uint8_t *)data) [j]];
+    out_img [ i     ] = 255 * palette [512 + ((uint8_t *)data) [j]];
+    out_img [ i + 3 ] = 255 * palette [768 + ((uint8_t *)data) [j]];
+  }
+
+  return std::make_unique <uint8_t*> (out_img);
+}
+
+
+void
+PPrinny_DumpTextureAndPalette ( uint32_t crc32_base,
+                                uint32_t crc32_palette,
+                                GLfloat* palette,
+                                GLsizei  width,
+                                GLsizei  height,
+                          const GLvoid*  paletted_data )
+{
+  if (GetFileAttributes (L"dump") == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (L"dump", nullptr);
+
+  if (GetFileAttributes (L"dump/textures") == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (L"dump/textures", nullptr);
+
+  wchar_t wszOutPath [MAX_PATH] = { L'\0' };
+
+  wsprintf ( wszOutPath, L"dump\\textures\\Paletted_%X",
+                 crc32_base );
+
+  if (GetFileAttributes (wszOutPath) == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (wszOutPath, nullptr);
+
+  wchar_t wszBaseFile [MAX_PATH] = { L'\0' };
+
+  lstrcatW (wszBaseFile, wszOutPath);
+  lstrcatW (wszBaseFile, L"\\base.dds");
+
+  if (GetFileAttributes (wszBaseFile) == INVALID_FILE_ATTRIBUTES) {
+    PPrinny_WriteUncompressedDDS ( GL_COLOR_INDEX,
+                                     width, height,
+                                       width * height, paletted_data,
+                                         wszBaseFile );
+  }
+
+  wchar_t wszUnpalettedFile [MAX_PATH] = { L'\0' };
+  wchar_t wszUnpalettedName [32]       = { L'\0' };
+
+  wsprintf ( wszUnpalettedName, L"color_%x.dds",
+               crc32_palette );
+
+  lstrcatW (wszUnpalettedFile, wszOutPath);
+  lstrcatW (wszUnpalettedFile, L"\\");
+  lstrcatW (wszUnpalettedFile, wszUnpalettedName);
+
+  if (GetFileAttributes (wszUnpalettedFile) == INVALID_FILE_ATTRIBUTES) {
+    auto color_img =
+      PPrinny_TEX_ConvertPalettedToBGRA ( width, height,
+                                            palette,
+                                              paletted_data );
+
+    PPrinny_WriteUncompressedDDS ( GL_BGRA,
+                                     width, height,
+                                       4 * width * height,
+                                         *color_img,wszUnpalettedFile);
+  }
+
+  wchar_t wszPaletteFile [MAX_PATH] = { L'\0' };
+  wchar_t wszPaletteName [32]       = { L'\0' };
+
+  wsprintf ( wszPaletteName, L"palette_%x.pal",
+               crc32_palette );
+
+  lstrcatW (wszPaletteFile, wszOutPath);
+  lstrcatW (wszPaletteFile, L"\\");
+  lstrcatW (wszPaletteFile, wszPaletteName);
+
+  FILE* fPalette = _wfopen (wszPaletteFile, L"wb+");
+
+  if (fPalette != nullptr) {
+    fwrite (palette, sizeof (float) * 256, 4, fPalette);
+    fclose (fPalette);
+  }
+}
+
+void
+PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
+                                   GLint    level,
+                                   GLenum   format,
+                                   GLsizei  width,
+                                   GLsizei  height,
+
+                                   GLsizei  imageSize,
+                             const GLvoid*  data )
+{
+  if (GetFileAttributes (L"dump") == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (L"dump", nullptr);
+
+  if (GetFileAttributes (L"dump/textures") == INVALID_FILE_ATTRIBUTES)
+    CreateDirectoryW (L"dump/textures", nullptr);
+
+  wchar_t wszOutName [MAX_PATH];
+
+  if (format != GL_COLOR_INDEX)
+    wsprintf ( wszOutName, L"dump\\textures\\Uncompressed_%lu_%X.dds",
+                 level, crc32 );
+  else {
+    wsprintf ( wszOutName, L"dump\\textures\\Paletted_%X",
+                 crc32 );
+    if (GetFileAttributes (wszOutName) == INVALID_FILE_ATTRIBUTES)
+      CreateDirectoryW (wszOutName, nullptr);
+
+    lstrcatW (wszOutName, L"\\base.dds");
+  }
+
+  // Early-Out if the texutre was already dumped.
+  if (GetFileAttributes (wszOutName) != INVALID_FILE_ATTRIBUTES)
+    return;
+
+  PPrinny_WriteUncompressedDDS ( format,
+                                   width,       height,
+                                     imageSize, data,
+                                           wszOutName );
 }
 
 

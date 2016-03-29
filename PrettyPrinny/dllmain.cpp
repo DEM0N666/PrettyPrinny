@@ -90,11 +90,9 @@ DllThread (LPVOID user)
   // Plugin State
   if (PPrinny_Init_MinHook () == MH_OK) {
 
-#if 0
     extern bool PPrinny_PatchDamageCrash (void);
     if (config.compatibility.patch_damage_bug)
       PPrinny_PatchDamageCrash ();
-#endif
 
     pp::DisplayFix::Init    ();
     pp::RenderFix::Init     ();

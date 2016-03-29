@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.4.3";
+std::wstring PPRINNY_VER_STR = L"0.5.0";
 pp_config_s config;
 
 struct {
@@ -44,6 +44,7 @@ struct {
   pp::ParameterBool*    bypass_intel_gl;
   pp::ParameterBool*    support_old_drivers;
   pp::ParameterBool*    debug_mode;
+  pp::ParameterBool*    fix_damage_text_crash;
 } compatibility;
 
 struct {
@@ -245,6 +246,16 @@ PPrinny_LoadConfig (std::wstring name) {
     dll_ini,
       L"PrettyPrinny.Compatibility",
         L"Debug" );
+
+  compatibility.fix_damage_text_crash =
+    static_cast <pp::ParameterBool *>
+      (g_ParameterFactory.create_parameter <bool> (
+        L"Fix Damage Crash")
+      );
+  compatibility.fix_damage_text_crash->register_to_ini (
+    dll_ini,
+      L"PrettyPrinny.Compatibility",
+        L"FixDamageCrash" );
 
 
 
@@ -600,15 +611,15 @@ PPrinny_LoadConfig (std::wstring name) {
   if (compatibility.debug_mode->load ())
     config.compatibility.debug_mode = compatibility.debug_mode->get_value ();
 
+  if (compatibility.fix_damage_text_crash->load ())
+    config.compatibility.patch_damage_bug = compatibility.fix_damage_text_crash->get_value ();
+
 
   if (textures.dump->load ())
     config.textures.dump = textures.dump->get_value ();
 
   if (textures.force_mipmaps->load ())
     config.textures.force_mipmaps = textures.force_mipmaps->get_value ();
-
-  // This cannot be used right now
-  config.textures.force_mipmaps = false;
 
   if (textures.pixelate->load ())
     config.textures.pixelate = textures.pixelate->get_value ();

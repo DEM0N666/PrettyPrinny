@@ -56,10 +56,11 @@ struct pp_config_s
   struct {
     bool     bypass_intel_gl     = true;
     bool     allow_gl_cpu_sync   = false;
-    bool     optimize_ctx_mgmt   = true;
+    bool     optimize_ctx_mgmt   = false;
+    bool     aggressive_opt      = false;
     bool     debug_mode          = false;
     bool     support_old_drivers = false;
-    bool     patch_damage_bug    = true;
+    bool     patch_damage_bug    = false;
   } compatibility;
 
   struct {
