@@ -44,6 +44,12 @@ DetourWindowProc ( _In_  HWND   hWnd,
                    _In_  WPARAM wParam,
                    _In_  LPARAM lParam );
 
+
+bool windowed = false;
+
+#include <dwmapi.h>
+#pragma comment (lib, "dwmapi.lib")
+
 BOOL
 WINAPI
 MoveWindow_Detour(
@@ -54,6 +60,14 @@ MoveWindow_Detour(
     _In_ int  nHeight,
     _In_ BOOL bRedraw )
 {
+  if (config.window.borderless && (! bRedraw) && windowed) {
+    SetWindowPos (hWnd, HWND_TOP, X, Y, nWidth, nHeight, 0);
+    return TRUE;
+  } else {
+    return MoveWindow_Original (hWnd, X, Y, nWidth, nHeight, bRedraw);
+  }
+
+#if 0
   dll_log.Log (L"[Window Mgr][!] MoveWindow (...)");
 
   pp::window.window_rect.left = X;
@@ -66,7 +80,10 @@ MoveWindow_Detour(
     return MoveWindow_Original (hWnd, X, Y, nWidth, nHeight, bRedraw);
   else
     return TRUE;
+#endif
 }
+
+
 
 BOOL
 WINAPI
@@ -79,7 +96,77 @@ SetWindowPos_Detour(
     _In_     int  cy,
     _In_     UINT uFlags)
 {
-  return TRUE;
+  BOOL bRet;
+  //SetWindowLongA (hWnd, GWL_STYLE, 0);
+
+  if (config.window.borderless /*&& windowed*/) {
+    HMONITOR hMonitor = 
+      MonitorFromWindow ( pp::RenderFix::hWndDevice,
+                          MONITOR_DEFAULTTOPRIMARY );//MONITOR_DEFAULTTONEAREST );
+
+    MONITORINFO mi = { 0 };
+    mi.cbSize      = sizeof (mi);
+
+    GetMonitorInfo (hMonitor, &mi);
+
+    int left = mi.rcMonitor.left;
+    int top  = mi.rcMonitor.top;
+
+    HWND hWndDesktop = GetDesktopWindow ();
+    RECT rectDesktop;
+    GetWindowRect (hWndDesktop, &rectDesktop);
+
+    if (cx > 1000 || (uFlags & SWP_NOSIZE))// || (uFlags & SWP_NOMOVE))
+      cx = config.display.width == 0 ? rectDesktop.right - rectDesktop.left :
+                                         config.display.width;
+
+    if (cx <= 0)
+      cx = 960;
+
+    if (cy > 600 || (uFlags & SWP_NOSIZE))// || (uFlags & SWP_NOMOVE))
+      cy = config.display.height == 0 ? rectDesktop.bottom - rectDesktop.top :
+                                           config.display.width;
+    if (cy <= 0)
+      cy = 540;
+
+    int width;
+    int height;
+
+    if (config.display.width > 0)
+      width = config.display.width  > cx ? cx : config.display.width;
+    else
+      width = cx;
+
+    if (config.display.height > 0)
+      height = config.display.height > cy ? cy : config.display.height;
+    else
+      height = cy;
+
+    if (config.window.center) {
+      if (width < (mi.rcWork.right - mi.rcWork.left))
+        left = ((mi.rcWork.right - mi.rcWork.left) - width) / 2;
+
+      if (height < (mi.rcWork.bottom - mi.rcWork.top))
+        top = ((mi.rcWork.bottom - mi.rcWork.top) - height) / 2;
+    }
+
+    bRet = SetWindowPos_Original ( pp::RenderFix::hWndDevice,
+                                     HWND_TOP,
+                                       left, top,
+                                         width, height,
+                                           SWP_SHOWWINDOW | SWP_FRAMECHANGED |
+                                           SWP_DEFERERASE | SWP_ASYNCWINDOWPOS );
+
+
+    ShowWindow          (pp::RenderFix::hWndDevice, SW_SHOW);
+    SetActiveWindow     (pp::RenderFix::hWndDevice);
+    //BringWindowToTop    (pp::RenderFix::hWndDevice);
+    SetFocus            (pp::RenderFix::hWndDevice);
+    SetForegroundWindow (pp::RenderFix::hWndDevice);
+  } else {
+    bRet = SetWindowPos_Original (hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags);
+  }
+return bRet;
 #if 0
   dll_log.Log ( L"[Window Mgr][!] SetWindowPos (...)");
 #endif
@@ -157,12 +244,7 @@ SetWindowPos_Detour(
 #endif
 }
 
-bool windowed = false;
-
-#include <dwmapi.h>
-#pragma comment (lib, "dwmapi.lib")
-
-
+__declspec (noinline)
 LONG
 WINAPI
 SetWindowLongA_Detour (
@@ -171,11 +253,11 @@ SetWindowLongA_Detour (
   _In_ LONG dwNewLong
 )
 {
-  pp::window.hwnd           = hWnd;//GetForegroundWindow_Original ();
-  pp::RenderFix::hWndDevice = hWnd;//GetForegroundWindow_Original ();
-
   // Setup window message detouring as soon as a window is created..
-  if (pp::window.WndProc_Original == nullptr) {
+  if (pp::window.WndProc_Original == nullptr && nIndex == GWL_STYLE) {
+    pp::window.hwnd           = hWnd;//GetForegroundWindow_Original ();
+    pp::RenderFix::hWndDevice = hWnd;//GetForegroundWindow_Original ();
+
     pp::window.WndProc_Original =
       (WNDPROC)GetWindowLongPtr (pp::RenderFix::hWndDevice, GWLP_WNDPROC);
 
@@ -186,9 +268,10 @@ SetWindowLongA_Detour (
                        _In_  WPARAM wParam,
                        _In_  LPARAM lParam );
 
-    SetWindowLongPtrA ( pp::RenderFix::hWndDevice,
-                          GWLP_WNDPROC,
-                            (LONG_PTR)DetourWindowProc );
+    //SetWindowLongPtrW ( pp::RenderFix::hWndDevice,
+    SetWindowLongA_Original ( pp::RenderFix::hWndDevice,
+                                GWLP_WNDPROC,
+                                  (LONG_PTR)DetourWindowProc );
   }
 
   if (nIndex == GWL_EXSTYLE || nIndex == GWL_STYLE) {
@@ -197,43 +280,52 @@ SetWindowLongA_Detour (
               nIndex == GWL_EXSTYLE ? L"GWL_EXSTYLE" :
                                       L" GWL_STYLE ",
                       dwNewLong );
-    //if (nIndex == GWL_STYLE)
-      //dwNewLong = WS_POPUP | WS_MINIMIZEBOX;
-    //if (nIndex == GWL_EXSTYLE)
-      //dwNewLong = WS_EX_APPWINDOW;
-
-    if (GWL_STYLE == 0xCF0000)
+    if (nIndex == GWL_STYLE && dwNewLong == 0xCF0000)
       windowed = true;
     else
       windowed = false;
 
     if (config.window.borderless) {
-      SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_STYLE,   WS_POPUP | WS_MINIMIZEBOX);
-      SetWindowLongA_Original (pp::RenderFix::hWndDevice, GWL_EXSTYLE, WS_EX_APPWINDOW);
-
-      HMONITOR hMonitor = 
-        MonitorFromWindow ( pp::RenderFix::hWndDevice,
-                            MONITOR_DEFAULTTONEAREST );
-
-      MONITORINFO mi = { 0 };
-      mi.cbSize      = sizeof (mi);
-
-      GetMonitorInfo (hMonitor, &mi);
-
-      SetWindowPos/*_Original*/ ( pp::RenderFix::hWndDevice,
-                               HWND_TOP,
-                                mi.rcMonitor.left,
-                                mi.rcMonitor.top,
-                                  mi.rcMonitor.right  - mi.rcMonitor.left,
-                                  mi.rcMonitor.bottom - mi.rcMonitor.top,
-                                    SWP_FRAMECHANGED | SWP_NOSENDCHANGING );
+      if (nIndex == GWL_STYLE)
+        dwNewLong = WS_POPUP | WS_MINIMIZEBOX;
+      if (nIndex == GWL_EXSTYLE)
+        dwNewLong = WS_EX_APPWINDOW;
     }
 
-    windowed = false;
-    DwmEnableMMCSS (TRUE);
-
-    return dwNewLong;
+    SetWindowLongA_Original (hWnd, nIndex, dwNewLong);
   }
+
+#if 0
+  if (config.window.borderless && nIndex == GWL_STYLE && windowed) {
+    HMONITOR hMonitor = 
+      MonitorFromWindow ( pp::RenderFix::hWndDevice,
+                          MONITOR_DEFAULTTONEAREST );
+
+    MONITORINFO mi = { 0 };
+    mi.cbSize      = sizeof (mi);
+
+    GetMonitorInfo (hMonitor, &mi);
+
+    SetWindowPos_Original ( pp::RenderFix::hWndDevice,
+                             HWND_TOP,
+                              mi.rcMonitor.left,
+                              mi.rcMonitor.top,
+                                config.display.width <= 0 ? mi.rcMonitor.right  - mi.rcMonitor.left :
+                                                            config.display.width,
+                                config.display.height <= 0 ? mi.rcMonitor.bottom - mi.rcMonitor.top :
+                                                             config.display.height,
+                                  SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOSENDCHANGING );
+
+  }
+
+  ShowWindow          (pp::RenderFix::hWndDevice, SW_SHOW);
+  SetActiveWindow     (pp::RenderFix::hWndDevice);
+  BringWindowToTop    (pp::RenderFix::hWndDevice);
+  SetFocus            (pp::RenderFix::hWndDevice);
+  SetForegroundWindow (pp::RenderFix::hWndDevice);
+#endif
+
+  DwmEnableMMCSS (TRUE);
 
 // TODO: Restore this functionality
 #if 0
@@ -250,7 +342,10 @@ SetWindowLongA_Detour (
   }
 #endif
 
-  return SetWindowLongA_Original (hWnd, nIndex, dwNewLong);
+  if (nIndex != GWL_STYLE && nIndex != GWL_EXSTYLE)
+    return SetWindowLongA_Original (hWnd, nIndex, dwNewLong);
+
+  return dwNewLong;
 }
 
 void
@@ -692,17 +787,13 @@ pp::WindowManager::Init (void)
                           keybd_event_Detour,
                 (LPVOID*)&keybd_event_Original );
 
-#if 0
   PPrinny_CreateDLLHook ( L"user32.dll", "SetWindowPos",
                           SetWindowPos_Detour,
                 (LPVOID*)&SetWindowPos_Original );
-#endif
 
-#if 0
  PPrinny_CreateDLLHook ( L"user32.dll", "MoveWindow",
                          MoveWindow_Detour,
                (LPVOID*)&MoveWindow_Original );
-#endif
 
   PPrinny_CreateDLLHook ( L"user32.dll", "GetForegroundWindow",
                           GetForegroundWindow_Detour,

@@ -228,6 +228,8 @@ PPrinny_InitCompatBlacklist (void)
   }
 }
 
+LPVOID __PP_end_img_addr = nullptr;
+
 void*
 PP_Scan (uint8_t* pattern, size_t len, uint8_t* mask)
 {
@@ -286,6 +288,8 @@ PP_Scan (uint8_t* pattern, size_t len, uint8_t* mask)
                     base_addr,
                       end_addr );
 #endif
+
+  __PP_end_img_addr = end_addr;
 
   uint8_t*  begin = (uint8_t *)base_addr;
   uint8_t*  it    = begin;
@@ -382,25 +386,49 @@ LPVOID lpvDamageHook = nullptr;
 
 __declspec (naked)
 void
-PP_DamageCrashHandler (void)
+PP_DamageCrashHandler1 (void)
 {
-  // Bail-out if we were returned a NULL pointer
+  // Never draw damage text
   __asm {
-    //pushad
-    //cmp esi,0
-    //jne ALL_GOOD
-    //popad
     pop edi
     pop esi
     pop ebx
     mov esp,ebp
     pop ebp
     ret
+  }
+}
+
+__declspec (naked)
+void
+PP_DamageCrashHandler2 (void)
+{
+  // Bail-out if we were returned a NULL pointer
+  __asm {
+    pushad
+    pushfd
+
+    cmp esi,0
+    jne ALL_GOOD
+
+    popfd
+    popad
+
+    pop edi
+    pop esi
+    pop ebx
+    mov esp,ebp
+    pop ebp
+
+    ret
+
 
     // Otherwise, resume normal operation
-//ALL_GOOD:
-  //  popad
-//    jmp lpvDamageHook
+ALL_GOOD:
+    popfd
+    popad
+
+    jmp lpvDamageHook
   }
 }
 
@@ -467,25 +495,35 @@ memccpy_Detour ( _Out_writes_bytes_opt_(_Size) void*       _Dst,
 bool
 PPrinny_PatchDamageCrash (void)
 {
-  if (! config.compatibility.patch_damage_bug)
-    return true;
-
   uint8_t sig  [] = { 0x8B, 0xF0, 0xFF, 0x15, 00, 00, 00, 00, 0xD9 };
   uint8_t mask [] = { 0xFF, 0xFF, 0xFF, 0xFF, 00, 00, 00, 00, 0xFF };
 
   intptr_t dwCrashAddr =
-    (intptr_t)PP_Scan (sig, sizeof (sig), mask);//0x00DCCEED;//0x00EECA45;
+    (intptr_t)PP_Scan (sig, sizeof (sig), mask);
 
   dwCrashAddr += sizeof (sig) - 1;
+
+  if (! config.compatibility.patch_damage_bug)
+    return true;
 
   dll_log.LogEx ( true, L"[Damage Fix] Patching executable (addr=%Xh)... ",
                           dwCrashAddr );
 
-  PPrinny_CreateFuncHook ( L"NISA_Damage_Crash",
-                             (LPVOID)dwCrashAddr,
-                               PP_DamageCrashHandler,
-                                 &lpvDamageHook );
-  PPrinny_EnableHook ((LPVOID)dwCrashAddr);
+  if (config.compatibility.patch_damage_bug == 1) {
+    PPrinny_CreateFuncHook ( L"NISA_Damage_Crash",
+                               (LPVOID)dwCrashAddr,
+                                 PP_DamageCrashHandler1,
+                                   &lpvDamageHook );
+    PPrinny_EnableHook ((LPVOID)dwCrashAddr);
+  }
+
+  else if (config.compatibility.patch_damage_bug == 2) {
+    PPrinny_CreateFuncHook ( L"NISA_Damage_Crash",
+                               (LPVOID)dwCrashAddr,
+                                 PP_DamageCrashHandler2,
+                                   &lpvDamageHook );
+    PPrinny_EnableHook ((LPVOID)dwCrashAddr);
+  }
 
   dll_log.LogEx ( false, L"done!\n");
 

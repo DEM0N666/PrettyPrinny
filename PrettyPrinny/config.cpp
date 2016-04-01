@@ -26,7 +26,7 @@
 static
   pp::INI::File* 
              dll_ini         = nullptr;
-std::wstring PPRINNY_VER_STR = L"0.5.0";
+std::wstring PPRINNY_VER_STR = L"0.5.1";
 pp_config_s config;
 
 struct {
@@ -44,7 +44,7 @@ struct {
   pp::ParameterBool*    bypass_intel_gl;
   pp::ParameterBool*    support_old_drivers;
   pp::ParameterBool*    debug_mode;
-  pp::ParameterBool*    fix_damage_text_crash;
+  pp::ParameterInt*     fix_damage_text_crash;
 } compatibility;
 
 struct {
@@ -248,8 +248,8 @@ PPrinny_LoadConfig (std::wstring name) {
         L"Debug" );
 
   compatibility.fix_damage_text_crash =
-    static_cast <pp::ParameterBool *>
-      (g_ParameterFactory.create_parameter <bool> (
+    static_cast <pp::ParameterInt *>
+      (g_ParameterFactory.create_parameter <int> (
         L"Fix Damage Crash")
       );
   compatibility.fix_damage_text_crash->register_to_ini (
@@ -804,10 +804,10 @@ PPrinny_SaveConfig (std::wstring name, bool close_config) {
   window.background_fps->store        ();
 #endif
 
-#if 0
   window.center->set_value            (config.window.center);
   window.center->store                ();
 
+#if 0
   window.x_offset->set_value          (config.window.x_offset);
   window.x_offset->store              ();
 

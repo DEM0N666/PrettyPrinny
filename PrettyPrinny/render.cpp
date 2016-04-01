@@ -28,65 +28,39 @@
 #include "hook.h"
 
 #include "render/gl_perf.h"
+#include "render/textures.h"
 
 #include <cstdint>
 #include <memory>
 
+//#define GL_PALETTES
+
+#define RESPONSIBLE_CTX_MGMT
+#ifdef RESPONSIBLE_CTX_MGMT
+HDC   game_dc   = 0;
+HGLRC game_glrc = 0;
+
+__declspec (thread) HDC   current_dc;
+__declspec (thread) HGLRC current_glrc;
+#else
+HDC   current_dc;
+HGLRC current_glrc;
+#endif
+
+
 //
 // Optimizations that may turn out to break stuff
 //
-int  program33_draws         = 0;
-
-pp::RenderFix::tracer_s
-  pp::RenderFix::tracer;
-
-pp::RenderFix::pp_draw_states_s
-  pp::RenderFix::draw_state;
-
-extern uint32_t
-crc32 (uint32_t crc, const void *buf, size_t size);
-
+int  program33_draws    = 0;
 bool drawing_main_scene = false;
 
-GLsizei game_width  = 1280;
-GLsizei game_height = 720;
+using namespace pp::RenderFix;
 
-GLsizei fb_width    = config.render.scene_res_x;
-GLsizei fb_height   = config.render.scene_res_y;
-
-typedef GLvoid (WINAPI *glCompressedTexSubImage2D_pfn)(
-        GLenum  target,
-        GLint   level,
-        GLint   xoffset,
-        GLint   yoffset,
-        GLsizei width,
-        GLsizei height,
-        GLenum  format,
-        GLsizei imageSize,
-  const GLvoid* data
-);
-
-#define GL_TEXTURE_BASE_LEVEL           0x813C
-#define GL_TEXTURE_MAX_LEVEL            0x813D
-
-#define GL_TEXTURE0                     0x84C0
-#define GL_ACTIVE_TEXTURE               0x84E0
-
-#define GL_TEXTURE_RECTANGLE            0x84F5
-
-#define GL_UNSIGNED_INT_8_8_8_8_REV     0x8367
-#define GL_BGRA                         0x80E1
-
-
-#define GL_CLAMP_TO_BORDER    0x812D
-#define GL_DEPTH_COMPONENT32F 0x8CAC
-#define GL_DEPTH_COMPONENT32  0x81A7
+tracer_s         pp::RenderFix::tracer;
+pp_draw_states_s pp::RenderFix::draw_state;
+pp_framebuffer_s pp::RenderFix::framebuffer;
 
 #define PP_DEPTH_FORMAT       GL_DEPTH_COMPONENT/*24*/
-
-GLfloat  pixel_maps [10][256];
-uint32_t pixel_map_crc32 = 0x0UL;
-
 
 glGenRenderbuffers_pfn               glGenRenderbuffers                 = nullptr;
 glBindRenderbuffer_pfn               glBindRenderbuffer                 = nullptr;
@@ -112,7 +86,11 @@ glCompressedTexSubImage2D_pfn        glCompressedTexSubImage2D          = nullpt
 glCopyTexSubImage2D_pfn              glCopyTexSubImage2D_Original       = nullptr;
 glDeleteTextures_pfn                 glDeleteTextures_Original          = nullptr;
 glTexParameteri_pfn                  glTexParameteri_Original           = nullptr;
+glPixelTransferi_pfn                 glPixelTransferi_Original          = nullptr;
+glPixelMapfv_pfn                     glPixelMapfv_Original              = nullptr;
+glTexStorage2D_pfn                   glTexStorage2D                     = nullptr;
 glGenerateMipmap_pfn                 glGenerateMipmap                   = nullptr;
+
 
 // Fast-path to avoid redundant CPU->GPU data transfers (there are A LOT of them)
 glCopyImageSubData_pfn               glCopyImageSubData                 = nullptr;
@@ -121,125 +99,70 @@ glCopyImageSubData_pfn               glCopyImageSubData                 = nullpt
 glReadPixels_pfn                     glReadPixels_Original              = nullptr;
 
 glGetFloatv_pfn                      glGetFloatv_Original               = nullptr;
+glGetIntegerv_pfn                    glGetIntegerv_Original             = nullptr;
 
 glMatrixMode_pfn                     glMatrixMode_Original              = nullptr;
 glLoadMatrixf_pfn                    glLoadMatrixf_Original             = nullptr;
 glOrtho_pfn                          glOrtho_Original                   = nullptr;
 glScalef_pfn                         glScalef_Original                  = nullptr;
-                                                                        
+
 glEnable_pfn                         glEnable_Original                  = nullptr;
 glDisable_pfn                        glDisable_Original                 = nullptr;
-                                                                        
+
 glAlphaFunc_pfn                      glAlphaFunc_Original               = nullptr;
 glBlendFunc_pfn                      glBlendFunc_Original               = nullptr;
 glDepthMask_pfn                      glDepthMask_Original               = nullptr;
-                                                                        
+
 glScissor_pfn                        glScissor_Original                 = nullptr;
 glViewport_pfn                       glViewport_Original                = nullptr;
-                                                                        
+
 glDrawArrays_pfn                     glDrawArrays_Original              = nullptr;
-                                                                        
+
 glUseProgram_pfn                     glUseProgram_Original              = nullptr;
 glGetShaderiv_pfn                    glGetShaderiv_Original             = nullptr;
 glShaderSource_pfn                   glShaderSource_Original            = nullptr;
 glAttachShader_pfn                   glAttachShader_Original            = nullptr;
-                                                                        
+
 glUniformMatrix4fv_pfn               glUniformMatrix4fv_Original        = nullptr;
 glUniformMatrix3fv_pfn               glUniformMatrix3fv_Original        = nullptr;
-                                                                        
+
 glVertexAttrib4f_pfn                 glVertexAttrib4f_Original          = nullptr;
 glVertexAttrib4fv_pfn                glVertexAttrib4fv_Original         = nullptr;
-                                                                        
+
+glGenBuffers_pfn                     glGenBuffers                       = nullptr;
+glBindBuffer_pfn                     glBindBuffer                       = nullptr;
+glDeleteBuffers_pfn                  glDeleteBuffers                    = nullptr;
+glBufferData_pfn                     glBufferData                       = nullptr;
+glGetBufferSubData_pfn               glGetBufferSubData                 = nullptr;
+
+glFenceSync_pfn                      glFenceSync                        = nullptr;
+glClientWaitSync_pfn                 glClientWaitSync                   = nullptr;
+glDeleteSync_pfn                     glDeleteSync                       = nullptr;
+
 glFinish_pfn                         glFinish_Original                  = nullptr;
 glFlush_pfn                          glFlush_Original                   = nullptr;
-                                                                        
+
 ChoosePixelFormat_pfn                ChoosePixelFormat_Original         = nullptr;
-                                                                        
+
 wglGetProcAddress_pfn                wglGetProcAddress_Original         = nullptr;
-                                                                        
+
 wglSwapIntervalEXT_pfn               wglSwapIntervalEXT_Original        = nullptr;
 wglSwapBuffers_pfn                   wglSwapBuffers                     = nullptr;
-                                                                        
+
 wglCreateContextAttribsARB_pfn       wglCreateContextAttribsARB         = nullptr;
 wglCreateContext_pfn                 wglCreateContext_Original          = nullptr;
 wglCopyContext_pfn                   wglCopyContext_Original            = nullptr;
 wglMakeCurrent_pfn                   wglMakeCurrent_Original            = nullptr;
-                                                                        
+
 BMF_BeginBufferSwap_pfn              BMF_BeginBufferSwap                = nullptr;
 BMF_EndBufferSwap_pfn                BMF_EndBufferSwap                  = nullptr;
 
-typedef GLvoid (WINAPI *glClear_pfn)(
-  GLbitfield mask
-);
-
-glClear_pfn glClear_Original = nullptr;
-
-extern void
-PPrinny_DumpCompressedTexLevel ( uint32_t crc32,
-                                 GLint    level,
-                                 GLenum   format,
-                                 GLsizei  width,
-                                 GLsizei  height,
-
-                                 GLsizei  imageSize,
-                           const GLvoid*  data );
-
-
-extern void
-PPrinny_DumpUncompressedTexLevel ( uint32_t crc32,
-                                   GLint    level,
-                                   GLenum   format,
-                                   GLsizei  width,
-                                   GLsizei  height,
-
-                                   GLsizei  imageSize,
-                             const GLvoid*  data );
-
+glClear_pfn                          glClear_Original                   = nullptr;
 
 #include <map>
 #include <unordered_set>
 
-// Technically, we could have 80, but this game only uses two stages...
-struct {
-  struct tex1d_s {
-    GLuint    name;
-    GLboolean enable;
-  } tex1d;
-
-  struct texRect_s {
-    GLuint    name;
-    GLboolean enable;
-  } texRect;
-
-  struct tex2d_s {
-    GLuint    name;
-    GLboolean enable;
-  } tex2d;
-
-  struct tex3d_s {
-    GLuint    name;
-    GLboolean enable;
-  } tex3d;
-} current_textures [32] = { { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 } };
-
-GLuint active_texture = 0;
-
-std::unordered_set <GLuint> thirdparty_texids;
-std::unordered_set <GLuint> opaque_texids;
-std::unordered_set <GLuint> translucent_texids;
-
 bool deferred_msaa = false;
-
-// The game hard-codes GL object names, yet another thing that will make porting
-//   difficult for NIS... but it makes modding easy :)
-struct {
-  GLuint shadow       = 67552UL; // Shadow   (FBO=1)
-  GLuint color        = 67553UL; // Color    (FBO=2)
-  GLuint depth        = 67554UL; // Depth    (FBO=2)
-  GLuint normal       = 67555UL; // Normal   (FBO=2)
-  GLuint position     = 67556UL; // Position (FBO=2)
-  GLuint unknown      = 67557UL; // Unknown  (FBO=3)
-} render_targets;
 
 struct msaa_ref_s {
   bool   dirty      = false;
@@ -364,6 +287,620 @@ private:
 //   smoothing behavior
 #include <unordered_set>
 std::unordered_set <GLuint> ui_textures;
+
+// -------------------- Texture Management ---------------------//
+
+GLfloat  pixel_maps [10][256];
+uint32_t pixel_map_crc32 = 0x0UL;
+
+pp_texture_state_s
+  current_textures [32] =
+  { { 0, 0 },
+    { 0, 0 },
+    { 0, 0 },
+    { 0, 0 } };
+
+GLuint                      active_texture = GL_NONE;
+std::unordered_set <GLuint> thirdparty_texids;
+
+
+#include <memory>
+
+std::unique_ptr <uint8_t*>
+PPrinny_TEX_ConvertPalettedToBGRA ( GLsizei  width,
+                                    GLsizei  height,
+                                    GLfloat* palette,
+                              const GLvoid*  data )
+{
+  uint8_t* out_img =
+    new uint8_t [width * height * 4];
+
+  for (int i = 0, j = 0 ; j < width * height ; j++, i += 4) {
+    uint8_t entry = ((uint8_t *)data) [j];
+
+#if 0 // Range restriction is unnecessary
+    out_img [ i + 2 ] = max (0, min (255, 255 * palette [000 + entry]));
+    out_img [ i + 1 ] = max (0, min (255, 255 * palette [256 + entry]));
+    out_img [ i     ] = max (0, min (255, 255 * palette [512 + entry]));
+    out_img [ i + 3 ] = max (0, min (255, 255 * palette [768 + entry]));
+#else
+    out_img [ i + 2 ] = 255 * palette [000 + entry];
+    out_img [ i + 1 ] = 255 * palette [256 + entry];
+    out_img [ i     ] = 255 * palette [512 + entry];
+    out_img [ i + 3 ] = 255 * palette [768 + entry];
+
+#endif
+  }
+
+  return std::make_unique <uint8_t*> (out_img);
+}
+
+struct texture_remapping_s {
+  GLuint getRemapped (GLuint texId) {
+    if (thirdparty_texids.count (texId))
+      return texId;
+
+    std::unordered_map <GLuint, GLuint>::iterator it =
+      remaps.find (texId);
+
+    if (remaps.find (texId) != remaps.end ())
+      return remaps [texId];
+
+    return texId;
+  }
+
+  GLuint findPermanentTexByChecksum (uint32_t checksum) {
+    if (checksums.find (checksum) != checksums.end ()) {
+      return checksums [checksum];
+    }
+
+    else
+      return (1 << 31);
+  }
+
+  uint32_t getChecksumForPermanentTex (GLuint texId) {
+    if (checksums_rev.find (texId) != checksums_rev.end ()) {
+      return checksums_rev [texId];
+    }
+
+    else
+      return 0x00UL;
+  }
+
+  void addChecksum (GLuint texId, uint32_t checksum) {
+    checksums.insert     (std::make_pair (checksum, texId));
+    checksums_rev.insert (std::make_pair (texId, checksum));
+  }
+
+  void addRemapping (GLuint texId_GAME, GLuint texId_GL) {
+    if ( remaps.find (texId_GAME) != remaps.end () ) {
+      if (remaps [texId_GAME] != texId_GL) {
+        remaps.erase  (texId_GAME);
+        remaps.insert (std::make_pair (texId_GAME,texId_GL));
+      }
+
+      return;
+    }
+
+    remaps.insert (std::make_pair (texId_GAME,texId_GL));
+  }
+
+  void removeRemapping (GLuint texId_GAME, GLuint texID_GL) {
+    remaps.erase (texId_GAME);
+  }
+
+  std::unordered_map <GLuint,   GLuint> remaps;
+
+  std::unordered_map <uint32_t, GLuint> checksums;
+  std::unordered_map <GLuint, uint32_t> checksums_rev;
+} texture_remap;
+
+void
+PPrinny_TEX_DisableMipmapping (void)
+{
+  glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+  glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,  0);
+}
+
+void
+PPrinny_TEX_GenerateMipmap (GLsizei width, GLsizei height)
+{
+  //glTexParameteri ( GL_TEXTURE_2D,
+                      //GL_TEXTURE_MIN_LOD,
+                        //0 );
+  glTexParameteri ( GL_TEXTURE_2D,
+                      GL_TEXTURE_MAX_LEVEL,
+                        max (0, (int)floor (log2 (max (width,height)))));
+
+  glGenerateMipmap ( GL_TEXTURE_2D );
+
+  if (config.textures.pixelate > 2) {
+    int lod_bias = config.textures.pixelate - 1;
+
+    glTexParameterf ( GL_TEXTURE_2D,
+                        GL_TEXTURE_LOD_BIAS,
+                          (float)lod_bias );
+  }
+
+  // We cannot mipmap normal maps, because that would require re-normalization
+  if ( active_texture != 0 ||
+       thirdparty_texids.count (
+         current_textures [active_texture].tex2d.name ) ) {
+    PPrinny_TEX_DisableMipmapping ();
+  }
+}
+
+std::unordered_set <GLuint> known_textures;
+
+void
+PPrinny_TEX_CopyTexState ( GLuint srcTex,
+                           GLuint dstTex )
+{
+  GLint num_levels;
+  GLint states [4];
+
+  glBindTexture_Original (GL_TEXTURE_2D, srcTex);
+
+  for (int i = 0; i < 4; i++)
+    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER+i, &states [i]);
+
+  glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, &num_levels);
+
+  glBindTexture_Original (GL_TEXTURE_2D, dstTex);
+
+  for (int i = 0; i < 4; i++)
+    glTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER+i, &states [i]);
+
+  glTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, &num_levels);
+}
+
+bool
+PPrinny_TEX_AvoidRedundantCPUtoGPU (
+  GLenum   target,
+  //GLint    level, -- NIS does not know what mipmap LODs are ;)
+  GLenum   internalFormat,
+  GLsizei  width,
+  GLsizei  height,
+
+  uint32_t checksum,
+  GLuint   texId,
+  void*    data_addr )
+{
+  if (target != GL_TEXTURE_2D)
+    dll_log.Log (L"Uh oh! (texid=%lu, target=%x)", target, texId);
+
+  if (! config.textures.caching)
+    return false;
+
+  //
+  // We only want the textures created by the game
+  //
+  if (texId > 67551 || texId == 0) {
+    dll_log.Log (L"[GL SpeedUp] Will not cache texture %lu...", texId);
+    return false;
+  }
+
+  known_textures.insert (texId);
+
+  if (texture_remap.getRemapped (texId) != texId) {
+    if ( texture_remap.getChecksumForPermanentTex (
+           texture_remap.getRemapped ( texId )
+         ) == checksum && checksum != 0x00UL ) {
+      //dll_log.Log ( L"[GL SpeedUp] 100%% Redundant Texture Upload Eliminated"
+                                //L" (texId=%lu)",
+                      //texId );
+      return true;
+    }
+    else {
+      if ( texture_remap.findPermanentTexByChecksum (checksum) != (1 << 31) ) {
+        GLuint tex = texture_remap.findPermanentTexByChecksum (checksum);
+        glBindTexture_Original (GL_TEXTURE_2D, tex);
+        texture_remap.addRemapping (texId, tex);
+
+        //dll_log.Log ( L"[GL SpeedUp] Cached Texture Upload Eliminated"
+                                //L" (texId=%lu)",
+                      //texId );
+        return true;
+      }
+    }
+  } else { /*dll_log.Log (L"[GL SpeedUp] Texture (%lu) remaps to itself?! <crc32: %x> format: %x, (%lux%lux), data: %ph",
+                        texId, checksum, internalFormat, width, height, data_addr); */}
+
+  return false;
+}
+
+void
+PPrinny_TEX_UploadTextureImage2D ( GLenum  target,
+                                   GLint   level,
+                                   GLenum  internalFormat,
+                                   GLsizei width,
+                                   GLsizei height,
+                                   GLint   border,
+                                   void*   data      = 0,
+                                   GLenum  format    = GL_BGRA,
+                                   GLenum  type      = GL_UNSIGNED_INT_8_8_8_8_REV,
+                                   GLsizei imageSize = 0 )
+{
+  // I am almost positive that no code should intentionally be
+  //   attempting to do this.
+  if (target == GL_TEXTURE_2D && current_textures [active_texture].tex2d.name == 0) {
+    dll_log.Log ( L"[GL Texture] Ignoring request to modify GL's default texture <"
+                  L"glCompressedTexImage2D (...)>" );
+    return;
+  }
+
+  uint32_t checksum = 0x00UL;
+
+  if (imageSize != 0 && data != nullptr)
+    checksum = crc32 (0, data, imageSize);
+
+  GLuint texId = current_textures [active_texture].tex2d.name;
+
+  //dll_log.Log ( L"texId: %lu, crc32: %x, Level: %li, target: %x, border: %lu, data: %ph",
+                  //texId, checksum, level, target, border, data );
+
+#define GL_COMPRESSED_RGB_S3TC_DXT1_EXT                   0x83F0
+#define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT                  0x83F1
+#define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT                  0x83F2
+#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT                  0x83F3
+
+  //
+  // COMPRESSED TEXTURES
+  //
+  if ( internalFormat >= GL_COMPRESSED_RGB_S3TC_DXT1_EXT &&
+       internalFormat <= GL_COMPRESSED_RGBA_S3TC_DXT5_EXT ) {
+    if ( config.textures.caching &&
+         PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                                internalFormat,
+                                                  width,
+                                                    height,
+                                                      checksum,
+                                                        texId, (void *)data ) ) {
+  //dll_log.Log (L"crc32: %x, Level: %li, target: %x, border: %lu, imageSize: %lu, data: %ph",
+               //checksum, level, target, border, imageSize, data);
+
+      if (pp::RenderFix::tracer.log)
+        dll_log.Log (L"[GL SpeedUp] Avoided redundant compressed texture upload...");
+
+      // Happy day! We just skipped a lot of framerate problems.
+      return;
+    }
+
+    if (config.textures.dump) {
+      PPrinny_DumpCompressedTexLevel ( checksum,
+                                         level,
+                                           internalFormat,
+                                             width,
+                                               height,
+                                                 imageSize,
+                                                   data );
+    }
+
+    GLuint cacheTexId;
+
+    if (config.textures.caching) {
+      glGenTextures            (1, &cacheTexId);
+      PPrinny_TEX_CopyTexState (texId, cacheTexId);
+      //glBindTexture_Original (GL_TEXTURE_2D, cacheTexId);
+    }
+
+    PPrinny_TEX_DisableMipmapping ();
+
+    glCompressedTexImage2D_Original (
+      target, level,
+        internalFormat,
+          width, height,
+            border,
+              imageSize, data );
+
+    if (config.textures.caching) {
+      texture_remap.addChecksum  (cacheTexId, checksum);
+      texture_remap.addRemapping (texId, cacheTexId);
+    }
+
+#if 0
+    dll_log.Log ( L"[GL Texture] Loaded Compressed Texture: Level=%li, (%lix%li) {%5.2f KiB}",
+                    level, width, height, (float)imageSize / 1024.0f );
+#endif
+
+  }
+
+
+  //
+  // UNCOMPRESSED TEXTURES
+  //
+  else {
+    bool depaletted = false;
+
+    //dll_log.Log ( L"[GL Texture] Target: %X, InternalFmt: %X, Format: %X, Type: %X, (%lux%lu @ %lu), data: %ph  [texId: %lu, unit: %lu]",
+                   //target, internalformat, format, type, width, height, level, data, texId, active_texture );
+
+    if (data != nullptr) {
+      if (internalFormat == GL_RGBA) {
+        const int imageSize = width * height * 4;
+                  checksum  = crc32 (0, data, imageSize);
+
+        if (config.textures.dump) {
+          //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
+
+          PPrinny_DumpUncompressedTexLevel (
+            checksum,
+              level,
+                format,
+                  width, height,
+                    imageSize,
+                      data );
+        }
+
+        //
+        // Gamepad Button Texture
+        // 
+        if (checksum == 0x7BE1DE43) {
+          int      size, width, height;
+          int      bpp;
+          uint8_t  type_ [4];
+          uint8_t  info_ [7];
+          uint8_t* tex;
+
+          FILE* fTGA;
+
+          if ((fTGA = fopen ("pad.tga", "rb")) != nullptr) {
+            fread (&type_, 1, 3, fTGA);
+            fseek (fTGA,   12,   SEEK_SET);
+            fread (&info_, 1, 6, fTGA);
+
+            if(! (type_[1] != 0 || (type_[2] != 2 && type_[2] != 3))) {
+              width  = info_ [0] + info_ [1] * 256;
+              height = info_ [2] + info_ [3] * 256;
+              bpp    = info_ [4];
+
+              size = width * height * (bpp >> 3);
+
+              tex =
+                (uint8_t*) malloc (size);
+
+              fread  (tex, size, 1, fTGA);
+              fclose (fTGA);
+
+              GLint texId = current_textures [active_texture].tex2d.name;
+
+              glTexImage2D_Original ( target,
+                                        level,
+                                          internalFormat,
+                                            width, height,
+                                              border,
+                                                format,
+                                                  type,
+                                                    tex );
+
+              PPrinny_TEX_GenerateMipmap (width, height);
+
+              free (tex);
+              return;
+            }
+          }
+        }
+      }
+
+      if (format == GL_COLOR_INDEX) {
+        // This sort of palette is easy, anything else will require a lot of work.
+        if (type == GL_UNSIGNED_BYTE) {
+          const int imageSize = width * height;
+                    checksum  = crc32 (0, data, imageSize);
+
+          if (config.textures.dump) {
+           //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
+            PPrinny_DumpTextureAndPalette ( checksum, pixel_map_crc32,
+                                  (GLfloat *)&pixel_maps [2],
+                                               width, height,
+                                                 data );
+          }
+
+#ifndef GL_PALETTES
+          checksum = crc32 (pixel_map_crc32, data, imageSize);
+        //^^^^^^^^
+        //
+        //   We checksummed the palette earlier, to avoid having to run through the process of
+        //     converting from palette -> BGRA just to find out if the image is already in VRAM.
+        //
+          if ( config.textures.caching &&
+               PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                                      GL_RGBA,
+                                                        width,
+                                                          height,
+                                                            checksum,
+                                                              texId, nullptr )) {
+            if (pp::RenderFix::tracer.log)
+              dll_log.Log (L"[GL SpeedUp] Avoided redundant paletted texture upload...");
+              // Happy day! We just skipped a lot of framerate problems.
+            return;
+          }
+
+          auto out_img =
+            PPrinny_TEX_ConvertPalettedToBGRA ( width, height,
+                                      (GLfloat *)&pixel_maps [2],
+                                                   data );
+          GLuint cacheTexId;
+
+          if (config.textures.caching) {
+            glGenTextures            (1, &cacheTexId);
+            PPrinny_TEX_CopyTexState (texId, cacheTexId);
+            //glBindTexture_Original (GL_TEXTURE_2D, cacheTexId);
+          }
+
+          PPrinny_TEX_DisableMipmapping ();
+
+          glTexImage2D_Original ( target,
+                                    level,
+                                      GL_RGBA,
+                                        width,
+                                          height,
+                                            border,
+                                              GL_BGRA,
+                                                GL_UNSIGNED_INT_8_8_8_8_REV,
+                                                  *out_img );
+
+
+          if (config.textures.caching) {
+            texture_remap.addChecksum  (cacheTexId, checksum);
+            texture_remap.addRemapping (texId, cacheTexId);
+          }
+
+          depaletted = true;
+#endif
+        } else {
+          dll_log.Log ( L"[ Tex Dump ] Color Index Format: (%lux%lu), Data Type: 0x%X",
+                          width, height, type );
+        }
+      }
+    }
+
+    // data == nullptr
+    else {
+      PPrinny_TEX_DisableMipmapping ();
+
+      dll_log.Log ( L"[GL Texture] Id=%i, LOD: %i, (%ix%i)",
+                      texId, level, width, height );
+
+      dll_log.Log ( L"[GL Texture]  >> Render Target - "
+                    L"Internal Format: %s",
+                      PP_GL_InternalFormat_ToStr (internalFormat).c_str () );
+
+      if (internalFormat == GL_RGBA16F) {
+        internalFormat = config.render.high_precision_ssao ? GL_RGB32F : GL_RGB16F;
+        format         = GL_RGB;
+
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+      } else if (internalFormat == GL_RGBA) {
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+      }
+
+      // Avoid driver weirdness from using a non-color renderable format
+      else if (internalFormat == GL_LUMINANCE8) {
+        internalFormat = GL_R8;
+        format         = GL_RED;
+
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+
+        dll_log.Log ( L"[Compliance] Setting up swizzle mask (r,r,r,1) on "
+                      L"GL_R8 instead of rendering to GL_LUMINANCE8" );
+
+        GLint swizzleMeTimbers [] = { GL_RED, GL_RED, GL_RED,
+                                      GL_ONE };
+        glTexParameteriv ( GL_TEXTURE_2D,
+                             GL_TEXTURE_SWIZZLE_RGBA,
+                               swizzleMeTimbers );
+      } else if (internalFormat == GL_DEPTH_COMPONENT) {
+        internalFormat = PP_DEPTH_FORMAT;
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+      }
+
+      if (texId >= render_targets.color && texId <= render_targets.position+1) {
+
+        //pp::RenderFix::fullscreen = true;
+
+
+        framebuffer.game_height = height;
+        framebuffer.game_width  = width;
+
+        if (framebuffer.game_height >= 720 && framebuffer.game_width >= 1280) {
+          framebuffer.real_width  = config.render.scene_res_x;
+          framebuffer.real_height = config.render.scene_res_y;
+        } else {
+          framebuffer.real_width  = framebuffer.game_width;
+          framebuffer.real_height = framebuffer.game_height;
+        }
+
+        width  = framebuffer.real_width;
+        height = framebuffer.real_height;
+
+        if (texId == render_targets.normal)
+          internalFormat = GL_RGB10_A2;
+
+        if (config.render.msaa_samples > 1)
+          msaa.createTexture (texId, internalFormat, width, height);
+      }
+    }
+
+    if (! depaletted) {
+      GLuint cacheTexId;
+
+      if ( config.textures.caching      &&
+           data != nullptr              &&
+           format != GL_DEPTH_COMPONENT &&
+           PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
+                                                  internalFormat,
+                                                    width,
+                                                      height,
+                                                        checksum,
+                                                            texId, nullptr )) {
+          //if (log_level > WARN)
+          //dll_log.Log (L"[GL SpeedUp] Avoided redundant uncompressed texture upload...");
+          // Happy day! We just skipped a lot of framerate problems.
+        return;
+      }
+
+      if (data != nullptr && config.textures.caching && format != GL_DEPTH_COMPONENT) {
+        glGenTextures            (1, &cacheTexId);
+        PPrinny_TEX_CopyTexState (texId, cacheTexId);
+        //glBindTexture_Original (GL_TEXTURE_2D, cacheTexId);
+      }
+
+      glTexImage2D_Original ( target, level,
+                                internalFormat,
+                                  width, height,
+                                    border,
+                                      format, type,
+                                        data );
+
+      if (data != nullptr && config.textures.caching && format != GL_DEPTH_COMPONENT) {
+        texture_remap.addChecksum  (cacheTexId, checksum);
+        texture_remap.addRemapping (texId, cacheTexId);
+      }
+    }
+
+    // The game just re-allocated the depth texture, we need to attach the new texture for
+    //   FBO completeness...
+    if (texId == render_targets.depth) {
+      GLuint draw_buffer;
+
+      glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
+
+      // Create the MSAA Resolve FBO if necessary
+      if (config.render.msaa_samples > 1 && msaa.resolve_fbo == 0)
+        glGenFramebuffers (1, &msaa.resolve_fbo);
+
+      if (config.render.msaa_samples > 1)
+        glBindFramebuffer_Original    ( GL_FRAMEBUFFER, msaa.resolve_fbo );
+      else
+        glBindFramebuffer_Original    ( GL_FRAMEBUFFER, 2                );
+
+      glFramebufferTexture2D_Original ( GL_FRAMEBUFFER,
+                                          GL_DEPTH_ATTACHMENT,
+                                            GL_TEXTURE_2D,
+                                              texId,
+                                                0 );
+
+      glBindFramebuffer_Original      ( GL_FRAMEBUFFER, draw_buffer      );
+    }
+  }
+
+  //
+  // Mipmap Generation
+  //
+  if (config.textures.force_mipmaps) {
+    if ( data != nullptr && texId < 67551) {
+      PPrinny_TEX_GenerateMipmap (width, height);
+      ////////dll_log.Log (L"[GL Texture] Generated mipmaps (on data upload) for Uncompressed TexID=%lu", texId);
+    }
+  } else {
+    PPrinny_TEX_DisableMipmapping ();
+  }
+}
 
 using namespace pp;
 
@@ -553,6 +1090,13 @@ GLvoid
 WINAPI
 glUseProgram_Detour (GLuint program)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glUseProgram_Original (program);
+  }
+
   bool redundant = (program == 0 && active_fbo != 0) ||
                    (program == active_program);
 
@@ -602,19 +1146,19 @@ glUseProgram_Detour (GLuint program)
   glUseProgram_Original (program);
 }
 
-typedef GLvoid (WINAPI *glGetIntegerv_pfn)(
-  GLenum pname,
-  GLint *params
-);
-
-glGetIntegerv_pfn glGetIntegerv_Original = nullptr;
-
 __declspec (noinline)
 GLvoid
 WINAPI
 glGetIntegerv_Detour ( GLenum pname,
                        GLint *params )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glGetIntegerv_Original (pname, params);
+  }
+
   if (pname == GL_TEXTURE_BINDING_2D) {
     *params = current_textures [active_texture].tex2d.name;
     return;
@@ -628,6 +1172,13 @@ GLvoid
 WINAPI
 glBlendFunc_Detour (GLenum srcfactor, GLenum dstfactor)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glBlendFunc_Original (srcfactor, dstfactor);
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] glBlendFunc (0x%X, 0x%X)",
                     srcfactor, dstfactor );
@@ -644,6 +1195,13 @@ GLvoid
 WINAPI
 glAlphaFunc_Detour (GLenum alpha_test, GLfloat ref_val)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glAlphaFunc_Original (alpha_test, ref_val);
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] glAlphaFunc (0x%X, %f)",
                     alpha_test, ref_val );
@@ -660,6 +1218,13 @@ GLvoid
 WINAPI
 glDepthMask_Detour (GLboolean flag)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glDepthMask_Original (flag);
+  }
+
   real_depth_mask = flag;
 
   return glDepthMask_Original (flag);
@@ -670,6 +1235,13 @@ GLvoid
 WINAPI
 glEnable_Detour (GLenum cap)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glEnable_Original (cap);
+  }
+
   // The game doesn't use fixed-function lighting, sheesh!
   //if (cap == GL_LIGHTING)
     //return;
@@ -683,39 +1255,9 @@ glEnable_Detour (GLenum cap)
     current_textures [active_texture].tex2d.enable = true;
   }
 
-  if (cap == GL_BLEND)      {
-    bool opaque = true;
+  if (cap == GL_BLEND)      real_blend_state = true;
 
-#if 0
-    for (int i = 0; i < 32; i++) {
-      // Handle the Steam overlay
-      if ( current_textures [i].texRect.name != 0 ) {
-        opaque = false;
-        break;
-      }
-
-      if ( (active_program != 0 || current_textures [i].tex2d.enable) &&
-           translucent_texids.count ( 
-             current_textures [i].tex2d.name ) ) {
-        opaque = false;
-        break;
-      }
-    }
-
-    if (! opaque)
-      real_blend_state = true;
-    else {
-      //dll_log.Log (L"[GL SpeedUp] Overriding Blend State... [All Opaque]");
-      real_blend_state = false;
-      glDisable_Original (GL_BLEND);
-      return;
-    }
-#else
-    real_blend_state = true;
-#endif
-  }
   if (cap == GL_ALPHA_TEST) real_alpha_state = true;
-
   if (cap == GL_DEPTH_TEST) real_depth_test  = true;
 
   return glEnable_Original (cap);
@@ -726,6 +1268,13 @@ GLvoid
 WINAPI
 glDisable_Detour (GLenum cap)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glDisable_Original (cap);
+  }
+
   // The game doesn't use fixed-function lighting, sheesh!
   //if (cap == GL_LIGHTING)
     //return;
@@ -758,6 +1307,13 @@ glTexParameteri_Detour (
   GLint  param
 )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glTexParameteri_Original (target, pname, param);
+  }
+
   GLuint texId = 0;
 
   if (target == GL_TEXTURE_2D) {
@@ -766,11 +1322,13 @@ glTexParameteri_Detour (
     // I am almost positive that no code should intentionally be
     //   attempting to do this.
     if (current_textures [active_texture].tex2d.name == 0) {
-      dll_log.Log ( L"[GL Texture] Ignoring request to modify GL's default texture <",
+      dll_log.Log ( L"[GL Texture] Ignoring request to modify GL's default texture <"
                     L"glTexParameteri (...)>" );
       return;
     }
   }
+
+  //dll_log.Log (L"[ GL Trace ] pname: %x", pname);
 
   if (texId > 67551 && texId <= 67557) {
     if (texId >= render_targets.color && (pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T))
@@ -805,7 +1363,7 @@ glTexParameteri_Detour (
         param = GL_NEAREST;
     }
 
-    if (config.textures.force_mipmaps)
+    if (config.textures.force_mipmaps && active_texture == 0)
     {
       if (pname == GL_TEXTURE_MIN_FILTER) {
         if (param == GL_LINEAR || param == GL_NEAREST) {
@@ -830,642 +1388,20 @@ glTexParameteri_Detour (
     }
   }
 
-  return glTexParameteri_Original (target, pname, param);
+  GLint filter;
+
+  if (pname == GL_TEXTURE_MIN_FILTER && target == GL_TEXTURE_2D) {
+    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+    current_textures [active_texture].tex2d.min_filter = filter;
+  }
+
+  if (pname == GL_TEXTURE_MAG_FILTER && target == GL_TEXTURE_2D) {
+    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &filter);
+    current_textures [active_texture].tex2d.mag_filter = filter;
+  }
+
+  glTexParameteri_Original (target, pname, param);
 }
-
-typedef GLvoid (WINAPI *glTexStorage2D_pfn)(
-  GLenum  target,
-  GLsizei levels,
-  GLenum  internalformat,
-  GLsizei width,
-  GLsizei height
-);
-
-glTexStorage2D_pfn glTexStorage2D = nullptr;
-
-
-struct texture_remapping_s {
-  GLuint getRemapped (GLuint texId) {
-    if (thirdparty_texids.count (texId))
-      return texId;
-
-    std::unordered_map <GLuint, GLuint>::iterator it =
-      remaps.find (texId);
-
-    if (remaps.find (texId) != remaps.end ())
-      return remaps [texId];
-
-    return texId;
-  }
-
-  GLuint findPermanentTexByChecksum (uint32_t checksum) {
-    if (checksums.find (checksum) != checksums.end ()) {
-      return checksums [checksum];
-    }
-
-    else
-      return (1 << 31);
-  }
-
-  uint32_t getChecksumForPermanentTex (GLuint texId) {
-    if (checksums_rev.find (texId) != checksums_rev.end ()) {
-      return checksums_rev [texId];
-    }
-
-    else
-      return 0x00UL;
-  }
-
-  void addChecksum (GLuint texId, uint32_t checksum) {
-    checksums.insert     (std::make_pair (checksum, texId));
-    checksums_rev.insert (std::make_pair (texId, checksum));
-  }
-
-  void addRemapping (GLuint texId_GAME, GLuint texId_GL) {
-    if ( remaps.find (texId_GAME) != remaps.end () ) {
-      if (remaps [texId_GAME] != texId_GL) {
-        remaps.erase  (texId_GAME);
-        remaps.insert (std::make_pair (texId_GAME,texId_GL));
-      }
-
-      return;
-    }
-
-    remaps.insert (std::make_pair (texId_GAME,texId_GL));
-  }
-
-  void removeRemapping (GLuint texId_GAME, GLuint texID_GL) {
-    remaps.erase (texId_GAME);
-  }
-
-  std::unordered_map <GLuint,   GLuint> remaps;
-
-  std::unordered_map <uint32_t, GLuint> checksums;
-  std::unordered_map <GLuint, uint32_t> checksums_rev;
-} texture_remap;
-
-void
-PPrinny_TEX_GenerateMipmap (GLsizei width, GLsizei height)
-{
-  //glTexParameteri ( GL_TEXTURE_2D,
-                      //GL_TEXTURE_MIN_LOD,
-                        //0 );
-  glTexParameteri ( GL_TEXTURE_2D,
-                      GL_TEXTURE_MAX_LEVEL,
-                        max (0, (int)floor (log2 (max (width,height)))));
-
-  glGenerateMipmap ( GL_TEXTURE_2D );
-
-  if (config.textures.pixelate > 2) {
-    int lod_bias = config.textures.pixelate - 1;
-
-#define GL_TEXTURE_LOD_BIAS                0x8501
-
-    glTexParameterf ( GL_TEXTURE_2D,
-                        GL_TEXTURE_LOD_BIAS,
-                          (float)lod_bias );
-  }
-
-  // We cannot mipmap normal maps, because that would require re-normalization
-  if ( active_texture == 1 ||
-       thirdparty_texids.count (
-         current_textures [active_texture].tex2d.name ) ) {
-    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,  0);
-  }
-}
-
-bool
-PPrinny_TEX_TestOpaque ( GLuint  texId,
-                         GLsizei width,          GLsizei height,
-                         GLenum  internalFormat, GLenum  format,
-                   const GLvoid* data )
-{
-#if 0
-  if (internalFormat == GL_RGBA && format == GL_RGBA) {
-    int first_alpha = 3;
-    int       alpha = first_alpha;
-
-    for (int alpha = first_alpha; alpha < width * height * 4; alpha += 4)
-      if (((uint8_t *)data) [alpha] != 0xff)
-        return false;
-  } else {
-    // Haven't bothered decoding DXT stuff yet...
-    return false;
-  }
-
-  dll_log.Log ( L"Identified texId (%lu) as opaque",
-                  texId );
-  return true;
-#else
-  return false;
-
-  static float fTexData [4*2048*2048];
-
-  bool opaque = true;
-
-  glGetTexImage ( GL_TEXTURE_2D, 0, GL_ALPHA, GL_FLOAT, &fTexData );
-
-  for (int i = 0; i < width * height; i++) {
-    if (fTexData [i] != 1.0f) {
-      opaque = false;
-      break;
-    }
-  }
-
-  if (opaque) {
-    if (translucent_texids.count (texId))
-      translucent_texids.erase (texId);
-
-    opaque_texids.insert (texId);
-
-    //dll_log.Log (L"Opaque Texture Detected... (texId=%lu)", texId);
-
-    return true;
-  }
-
-  else {
-    if (opaque_texids.count (texId))
-      opaque_texids.erase (texId);
-
-    translucent_texids.insert (texId);
-
-    //dll_log.Log (L"Translucent Texture Detected... (texId=%lu)", texId);
-
-    return false;
-  }
-#endif
-}
-
-std::unordered_set <GLuint> known_textures;
-
-bool
-PPrinny_TEX_AvoidRedundantCPUtoGPU (
-  GLenum   target,
-  //GLint    level, -- NIS does not know what mipmap LODs are ;)
-  GLenum   internalFormat,
-  GLsizei  width,
-  GLsizei  height,
-
-  uint32_t checksum,
-  GLuint   texId,
-  void*    data_addr )
-{
-  if (target != GL_TEXTURE_2D)
-    dll_log.Log (L"Uh oh! (texid=%lu, target=%x)", target, texId);
-
-  if (! config.textures.caching)
-    return false;
-
-  //
-  // We only want the textures created by the game
-  //
-  if (texId > 67551 || texId == 0) {
-    dll_log.Log (L"[GL SpeedUp] Will not cache texture %lu...", texId);
-    return false;
-  }
-
-  known_textures.insert (texId);
-
-  if (texture_remap.getRemapped (texId) != texId) {
-    if ( texture_remap.getChecksumForPermanentTex (
-           texture_remap.getRemapped ( texId )
-         ) == checksum && checksum != 0x00UL ) {
-      //dll_log.Log ( L"[GL SpeedUp] 100%% Redundant Texture Upload Eliminated"
-                                //L" (texId=%lu)",
-                      //texId );
-      return true;
-    }
-    else {
-      if ( texture_remap.findPermanentTexByChecksum (checksum) != (1 << 31) ) {
-        GLuint tex = texture_remap.findPermanentTexByChecksum (checksum);
-        glBindTexture_Original (GL_TEXTURE_2D, tex);
-        texture_remap.addRemapping (texId, tex);
-
-        //dll_log.Log ( L"[GL SpeedUp] Cached Texture Upload Eliminated"
-                                //L" (texId=%lu)",
-                      //texId );
-        return true;
-      }
-    }
-  } else { /*dll_log.Log (L"[GL SpeedUp] Texture (%lu) remaps to itself?! <crc32: %x> format: %x, (%lux%lux), data: %ph",
-                        texId, checksum, internalFormat, width, height, data_addr); */}
-
-  return false;
-}
-
-void
-PPrinny_TEX_UploadTextureImage2D ( GLenum  target,
-                                   GLint   level,
-                                   GLenum  internalFormat,
-                                   GLsizei width,
-                                   GLsizei height,
-                                   GLint   border,
-                                   void*   data      = 0,
-                                   GLenum  format    = GL_BGRA,
-                                   GLenum  type      = GL_UNSIGNED_INT_8_8_8_8_REV,
-                                   GLsizei imageSize = 0 )
-{
-  // I am almost positive that no code should intentionally be
-  //   attempting to do this.
-  if (current_textures [active_texture].tex2d.name == 0) {
-    dll_log.Log ( L"[GL Texture] Ignoring request to modify GL's default texture <",
-                  L"glCompressedTexImage2D (...)>" );
-    return;
-  }
-
-  uint32_t checksum = 0x00UL;
-
-  if (imageSize != 0 && data != nullptr)
-    checksum = crc32 (0, data, imageSize);
-
-  GLuint texId = current_textures [active_texture].tex2d.name;
-
-  //dll_log.Log ( L"texId: %lu, crc32: %x, Level: %li, target: %x, border: %lu, data: %ph",
-                  //texId, checksum, level, target, border, data );
-
-#define GL_COMPRESSED_RGB_S3TC_DXT1_EXT                   0x83F0
-#define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT                  0x83F1
-#define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT                  0x83F2
-#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT                  0x83F3
-
-  //
-  // COMPRESSED TEXTURES
-  //
-  if ( internalFormat >= GL_COMPRESSED_RGB_S3TC_DXT1_EXT &&
-       internalFormat <= GL_COMPRESSED_RGBA_S3TC_DXT5_EXT ) {
-    if ( config.textures.caching &&
-         PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
-                                                internalFormat,
-                                                  width,
-                                                    height,
-                                                      checksum,
-                                                        texId, (void *)data ) ) {
-  //dll_log.Log (L"crc32: %x, Level: %li, target: %x, border: %lu, imageSize: %lu, data: %ph",
-               //checksum, level, target, border, imageSize, data);
-
-      if (pp::RenderFix::tracer.log)
-        dll_log.Log (L"[GL SpeedUp] Avoided redundant compressed texture upload...");
-
-      // Happy day! We just skipped a lot of framerate problems.
-      return;
-    }
-
-    if (config.textures.dump) {
-      PPrinny_DumpCompressedTexLevel ( checksum,
-                                         level,
-                                           internalFormat,
-                                             width,
-                                               height,
-                                                 imageSize,
-                                                   data );
-    }
-
-    GLuint cacheTexId;
-
-    if (config.textures.caching) {
-      glGenTextures          (1, &cacheTexId);
-      glBindTexture_Original (GL_TEXTURE_2D, cacheTexId);
-    }
-
-    glCompressedTexImage2D_Original (
-      target, level,
-        internalFormat,
-          width, height,
-            border,
-              imageSize, data );
-
-    if (config.textures.caching) {
-      texture_remap.addChecksum  (cacheTexId, checksum);
-      texture_remap.addRemapping (texId, cacheTexId);
-    }
-
-#if 0
-    dll_log.Log ( L"[GL Texture] Loaded Compressed Texture: Level=%li, (%lix%li) {%5.2f KiB}",
-                    level, width, height, (float)imageSize / 1024.0f );
-#endif
-
-  }
-
-
-  //
-  // UNCOMPRESSED TEXTURES
-  //
-  else {
-    bool depaletted = false;
-
-    //dll_log.Log ( L"[GL Texture] Target: %X, InternalFmt: %X, Format: %X, Type: %X, (%lux%lu @ %lu), data: %ph  [texId: %lu, unit: %lu]",
-                   //target, internalformat, format, type, width, height, level, data, texId, active_texture );
-
-    if (data != nullptr) {
-      if (internalFormat == GL_RGBA) {
-        const int imageSize = width * height * 4;
-                  checksum  = crc32 (0, data, imageSize);
-
-        if (config.textures.dump) {
-          //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
-
-          PPrinny_DumpUncompressedTexLevel (
-            checksum,
-              level,
-                format,
-                  width, height,
-                    imageSize,
-                      data );
-        }
-
-        //
-        // Gamepad Button Texture
-        // 
-        if (checksum == 0x7BE1DE43) {
-          int      size, width, height;
-          int      bpp;
-          uint8_t  type_ [4];
-          uint8_t  info_ [7];
-          uint8_t* tex;
-
-          FILE* fTGA;
-
-          if ((fTGA = fopen ("pad.tga", "rb")) != nullptr) {
-            fread (&type_, 1, 3, fTGA);
-            fseek (fTGA,   12,   SEEK_SET);
-            fread (&info_, 1, 6, fTGA);
-
-            if(! (type_[1] != 0 || (type_[2] != 2 && type_[2] != 3))) {
-              width  = info_ [0] + info_ [1] * 256;
-              height = info_ [2] + info_ [3] * 256;
-              bpp    = info_ [4];
-
-              size = width * height * (bpp >> 3);
-
-              tex =
-                (uint8_t*) malloc (size);
-
-              fread  (tex, size, 1, fTGA);
-              fclose (fTGA);
-
-              GLint texId = current_textures [active_texture].tex2d.name;
-              ui_textures.insert (texId);
-
-              glTexImage2D_Original ( target,
-                                        level,
-                                          internalFormat,
-                                            width, height,
-                                              border,
-                                                format,
-                                                  type,
-                                                    tex );
-
-              PPrinny_TEX_GenerateMipmap (width, height);
-
-              free (tex);
-              return;
-            }
-          }
-        }
-      }
-
-      if (format == GL_COLOR_INDEX) {
-        // This sort of palette is easy, anything else will require a lot of work.
-        if (type == GL_UNSIGNED_BYTE) {
-          const int imageSize = width * height;
-                    checksum  = crc32 (0, data, imageSize);
-
-          if (config.textures.dump) {
-           //dll_log.Log (L"[ Tex Dump ] Format: 0x%X, Internal: 0x%X", format, internalformat);
-
-           extern void
-           PPrinny_DumpTextureAndPalette ( uint32_t crc32_base,
-                                           uint32_t crc32_palette,
-                                           GLfloat* palette,
-                                           GLsizei  width,
-                                           GLsizei  height,
-                                     const GLvoid*  paletted_data );
-
-            PPrinny_DumpTextureAndPalette ( checksum, pixel_map_crc32,
-                                  (GLfloat *)&pixel_maps [2],
-                                               width, height,
-                                                 data );
-          }
-
-          checksum = crc32 (pixel_map_crc32, data, imageSize);
-        //^^^^^^^^
-        //
-        //   We checksummed the palette earlier, to avoid having to run through the process of
-        //     converting from palette -> BGRA just to find out if the image is already in VRAM.
-        //
-          if ( config.textures.caching &&
-               PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
-                                                      GL_RGBA,
-                                                        width,
-                                                          height,
-                                                            checksum,
-                                                              texId, nullptr )) {
-            if (pp::RenderFix::tracer.log)
-              dll_log.Log (L"[GL SpeedUp] Avoided redundant paletted texture upload...");
-              // Happy day! We just skipped a lot of framerate problems.
-            return;
-          }
-
-          extern
-          std::unique_ptr <uint8_t*>
-          PPrinny_TEX_ConvertPalettedToBGRA ( GLsizei  width,
-                                              GLsizei  height,
-                                              GLfloat* palette,
-                                        const GLvoid*  data );
-
-          auto out_img =
-            PPrinny_TEX_ConvertPalettedToBGRA ( width, height,
-                                      (GLfloat *)&pixel_maps [2],
-                                                   data );
-          GLuint cacheTexId;
-
-          if (config.textures.caching) {
-            glGenTextures          (1, &cacheTexId);
-            glBindTexture_Original (GL_TEXTURE_2D, cacheTexId);
-          }
-
-          glTexImage2D_Original ( target,
-                                    level,
-                                      GL_RGBA,
-                                        width,
-                                          height,
-                                            border,
-                                              GL_BGRA,
-                                                GL_UNSIGNED_INT_8_8_8_8_REV,
-                                                  *out_img );
-
-
-          if (config.textures.caching) {
-            texture_remap.addChecksum  (cacheTexId, checksum);
-            texture_remap.addRemapping (texId, cacheTexId);
-          }
-
-          depaletted = true;
-        } else {
-          dll_log.Log ( L"[ Tex Dump ] Color Index Format: (%lux%lu), Data Type: 0x%X",
-                          width, height, type );
-        }
-      }
-    }
-
-    // data == nullptr
-    else {
-      dll_log.Log ( L"[GL Texture] Id=%i, LOD: %i, (%ix%i)",
-                      texId, level, width, height );
-
-      dll_log.Log ( L"[GL Texture]  >> Render Target - "
-                    L"Internal Format: %s",
-                      PP_GL_InternalFormat_ToStr (internalFormat).c_str () );
-
-      if (internalFormat == GL_RGBA16F) {
-        internalFormat = config.render.high_precision_ssao ? GL_RGB32F : GL_RGB16F;
-        format         = GL_RGB;
-
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-      } else if (internalFormat == GL_RGBA) {
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-      }
-
-      // Avoid driver weirdness from using a non-color renderable format
-      else if (internalFormat == GL_LUMINANCE8) {
-        internalFormat = GL_R8;
-        format         = GL_RED;
-
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-
-        dll_log.Log ( L"[Compliance] Setting up swizzle mask (r,r,r,1) on "
-                      L"GL_R8 instead of rendering to GL_LUMINANCE8" );
-
-        GLint swizzleMeTimbers [] = { GL_RED, GL_RED, GL_RED,
-                                      GL_ONE };
-        glTexParameteriv ( GL_TEXTURE_2D,
-                             GL_TEXTURE_SWIZZLE_RGBA,
-                               swizzleMeTimbers );
-      } else if (internalFormat == GL_DEPTH_COMPONENT) {
-        internalFormat = PP_DEPTH_FORMAT;
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER );
-        glTexParameteri_Original ( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER );
-      }
-
-      if (texId >= render_targets.color && texId <= render_targets.position+1) {
-
-        //pp::RenderFix::fullscreen = true;
-
-        game_height = height;
-        game_width  = width;
-
-        if (game_height >= 720 && game_width >= 1280) {
-          fb_width  = config.render.scene_res_x;
-          fb_height = config.render.scene_res_y;
-        } else {
-          fb_width  = game_width;
-          fb_height = game_height;
-        }
-
-        width  = fb_width;
-        height = fb_height;
-
-        //if (texId == render_targets.normal)
-          //internalFormat = GL_RGB10_A2;
-
-        if (config.render.msaa_samples > 1)
-          msaa.createTexture (texId, internalFormat, width, height);
-      }
-    }
-
-    if (format != GL_COLOR_INDEX) {// depaletted) {
-      GLuint cacheTexId;
-
-      if ( config.textures.caching      &&
-           data != nullptr              &&
-           format != GL_DEPTH_COMPONENT &&
-           PPrinny_TEX_AvoidRedundantCPUtoGPU ( target,
-                                                  internalFormat,
-                                                    width,
-                                                      height,
-                                                        checksum,
-                                                            texId, nullptr )) {
-          //if (log_level > WARN)
-          //dll_log.Log (L"[GL SpeedUp] Avoided redundant uncompressed texture upload...");
-          // Happy day! We just skipped a lot of framerate problems.
-        return;
-      }
-
-      if (data != nullptr && config.textures.caching && format != GL_DEPTH_COMPONENT) {
-        glGenTextures          (1, &cacheTexId);
-        glBindTexture_Original (GL_TEXTURE_2D, cacheTexId);
-      }
-
-      glTexImage2D_Original ( target, level,
-                                internalFormat,
-                                  width, height,
-                                    border,
-                                      format, type,
-                                        data );
-
-      if (data != nullptr && config.textures.caching && format != GL_DEPTH_COMPONENT) {
-        texture_remap.addChecksum  (cacheTexId, checksum);
-        texture_remap.addRemapping (texId, cacheTexId);
-      }
-    }
-
-    // The game just re-allocated the depth texture, we need to attach the new texture for
-    //   FBO completeness...
-    if (texId == render_targets.depth) {
-      GLuint draw_buffer;
-
-      glGetIntegerv (GL_FRAMEBUFFER_BINDING, (GLint *)&draw_buffer);
-
-      // Create the MSAA Resolve FBO if necessary
-      if (config.render.msaa_samples > 1 && msaa.resolve_fbo == 0)
-        glGenFramebuffers (1, &msaa.resolve_fbo);
-
-      if (config.render.msaa_samples > 1)
-        glBindFramebuffer_Original    ( GL_FRAMEBUFFER, msaa.resolve_fbo );
-      else
-        glBindFramebuffer_Original    ( GL_FRAMEBUFFER, 2                );
-
-      glFramebufferTexture2D_Original ( GL_FRAMEBUFFER,
-                                          GL_DEPTH_ATTACHMENT,
-                                            GL_TEXTURE_2D,
-                                              texId,
-                                                0 );
-
-      glBindFramebuffer_Original      ( GL_FRAMEBUFFER, draw_buffer      );
-    }
-  }
-
-#if 0
-  PPrinny_TEX_TestOpaque ( texId,
-                           width,          height,
-                           internalFormat, GL_RGBA,
-                           data );
-#endif
-
-  //
-  // Mipmap Generation
-  //
-  if (config.textures.force_mipmaps) {
-    if ( data != nullptr && texId < 67551) {
-      PPrinny_TEX_GenerateMipmap (width, height);
-      ////////dll_log.Log (L"[GL Texture] Generated mipmaps (on data upload) for Uncompressed TexID=%lu", texId);
-    }
-  } else {
-    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri_Original (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,  0);
-  }
-}
-
-typedef GLvoid (WINAPI *glPixelTransferi_pfn)(
-  GLenum pname,
-  GLint  param
-);
-
-glPixelTransferi_pfn glPixelTransferi_Original = nullptr;
 
 __declspec (noinline)
 GLvoid
@@ -1474,19 +1410,20 @@ glPixelTransferi_Detour (
   GLenum pname,
   GLint  param )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glPixelTransferi_Original (pname, param);
+  }
+
 //  dll_log.Log ( L"[ GL Trace ] PixelTransferi: %x, %lu",
 //                  pname, param );
 
-//  glPixelTransferi_Original (pname, param);
+#ifdef GL_PALETTES
+  glPixelTransferi_Original (pname, param);
+#endif
 }
-
-typedef GLvoid (WINAPI *glPixelMapfv_pfn)(
-        GLenum   map,
-        GLsizei  mapsize,
-  const GLfloat* values
-);
-
-glPixelMapfv_pfn glPixelMapfv_Original = nullptr;
 
 __declspec (noinline)
 GLvoid
@@ -1496,13 +1433,22 @@ glPixelMapfv_Detour (
         GLsizei  mapsize,
   const GLfloat* values )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glPixelMapfv_Original (map, mapsize, values);
+  }
+
   //if ((! aggressive_optimization) || memcmp (pixel_maps [map - GL_PIXEL_MAP_I_TO_I], values, mapsize * sizeof (GLfloat))) {
     //dll_log.Log (L"Map Change");
     memcpy (pixel_maps [map - GL_PIXEL_MAP_I_TO_I], values, mapsize * sizeof (GLfloat));
     pixel_map_crc32 =
       crc32 (0, &pixel_maps [2], 4 * sizeof (GLfloat) * 256);
     //dll_log.Log (L"Pixel Map Size: %lu, idx: %lu", mapsize, map - GL_PIXEL_MAP_I_TO_I);
-    //glPixelMapfv_Original (map, mapsize, values);
+#ifdef GL_PALETTES
+    glPixelMapfv_Original (map, mapsize, values);
+#endif
   //} else {
     //dll_log.Log (L"Redundant glPixelMapfv call cancelled");
     //return;
@@ -1522,16 +1468,60 @@ glCompressedTexImage2D_Detour (
         GLsizei imageSize, 
   const GLvoid* data )
 {
-  PPrinny_TEX_UploadTextureImage2D (
-    target,
-      level,
-        internalFormat,
-          width,
-            height,
-              border,
-                (void *)data,
-                  GL_NONE, GL_NONE,
-                    imageSize );
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glCompressedTexImage2D_Original ( target, level, internalFormat,
+                                             width, height, border, imageSize,
+                                             data );
+  }
+
+  extern LPVOID __PP_end_img_addr;
+
+  // I am almost positive that no code should intentionally be
+  //   attempting to do this.
+  if (target == GL_TEXTURE_2D && current_textures [active_texture].tex2d.name == 0) {
+    dll_log.Log ( L"[GL Texture] Ignoring request to modify GL's default texture <"
+                  L"glCompressedTexImage2D (...)>" );
+    return;
+  }
+
+  //
+  // Only cache stuff that came from the game!
+  //
+  if (target == GL_TEXTURE_2D) {
+    PPrinny_TEX_UploadTextureImage2D (
+      target,
+        level,
+          internalFormat,
+            width,
+              height,
+                border,
+                  (void *)data,
+                    GL_NONE, GL_NONE,
+                      imageSize );
+  } else {
+    dll_log.Log (L"[ GL Trace ] Target: %x", target);
+    PPrinny_TEX_DisableMipmapping ();
+
+    if (target == GL_TEXTURE_RECTANGLE)
+      thirdparty_texids.insert (current_textures [active_texture].texRect.name);
+    else
+      thirdparty_texids.insert (current_textures [active_texture].tex2d.name);
+
+    //dll_log.Log (L"[SteamOvrly] Assuming upload is from 3rd party software -- IntFmt: %x, Fmt: %x, Target: %x, data: %ph, texId: %lu",
+      //internalformat, format, target, data, current_textures [active_texture].tex2d.name );
+    glCompressedTexImage2D_Original (
+      target,
+        level,
+          internalFormat,
+            width,
+              height,
+                border,
+                  imageSize,
+                    data );
+  }
 }
 
 GLuint
@@ -1606,13 +1596,13 @@ MSAABackend::resolveTexture (GLuint texId)
   if (it != backing_textures.end ()) {
     if (it->second->dirty) {
       switch (texId) {
-        case 67554:
+        case render_targets.depth:
 BEGIN_TASK_TIMING
           if (GLPerf::timers [GLPerf::TASK_MSAA0]->isReady ())
             GLPerf::timers [GLPerf::TASK_MSAA0]->requestTimestamp ();
 END_TASK_TIMING
           break;
-        case 67553:
+        case render_targets.color:
 BEGIN_TASK_TIMING
            if (GLPerf::timers [GLPerf::TASK_MSAA1]->isReady ())
             GLPerf::timers [GLPerf::TASK_MSAA1]->requestTimestamp ();
@@ -1620,7 +1610,7 @@ END_TASK_TIMING
           break;
 
         // Normals
-        case 67555:
+        case render_targets.normal:
 BEGIN_TASK_TIMING
            if (GLPerf::timers [GLPerf::TASK_MSAA2]->isReady ())
             GLPerf::timers [GLPerf::TASK_MSAA2]->requestTimestamp ();
@@ -1633,7 +1623,7 @@ END_TASK_TIMING
           break;
 
         // Position
-        case 67556:
+        case render_targets.position:
 BEGIN_TASK_TIMING
            if (GLPerf::timers [GLPerf::TASK_MSAA3]->isReady ())
             GLPerf::timers [GLPerf::TASK_MSAA3]->requestTimestamp ();
@@ -1678,9 +1668,9 @@ END_TASK_TIMING
       glDrawBuffer (buffer);
 
         glBlitFramebuffer_Original ( 0, 0,
-                                       fb_width, fb_height,
+                                       framebuffer.real_width, framebuffer.real_height,
                                      0, 0,
-                                       fb_width, fb_height,
+                                       framebuffer.real_width, framebuffer.real_height,
                                      bitmask,
                                        GL_NEAREST );
 
@@ -1701,6 +1691,13 @@ GLvoid
 WINAPI
 glBindFramebuffer_Detour (GLenum target, GLuint framebuffer)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glBindFramebuffer_Original ( target, framebuffer );
+  }
+
   GLuint previous_fbo = active_fbo;
          active_fbo   = framebuffer;
 
@@ -1754,6 +1751,13 @@ glFramebufferRenderbuffer_Detour ( GLenum target,
                                    GLenum renderbuffertarget,
                                    GLuint renderbuffer )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glFramebufferRenderbuffer_Original ( target, attachment, renderbuffertarget, renderbuffer );
+  }
+
   if (config.render.msaa_samples > 1)
     if (msaa.attachRenderbuffer (target, attachment, renderbuffer))
       return;
@@ -1793,6 +1797,14 @@ glDrawBuffers_Detour
   const GLenum* bufs
 )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glDrawBuffers_Original ( n, bufs );
+  }
+
+
   if (pp::RenderFix::tracer.log) {
     dll_log.LogEx ( true, L"[ GL Trace ] glDrawBuffers (%lu, {",
                       n );
@@ -1818,6 +1830,14 @@ glFramebufferTexture2D_Detour ( GLenum target,
                                 GLuint texture, 
                                 GLint  level )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glFramebufferTexture2D_Original ( target, attachment,
+                                             textarget, texture, level );
+  }
+
   if (config.render.msaa_samples > 1)
     if (msaa.attachTexture (target, attachment, texture, textarget, level))
       return;
@@ -1829,70 +1849,8 @@ glFramebufferTexture2D_Detour ( GLenum target,
                                             level );
 }
 
-#define GL_PIXEL_PACK_BUFFER         0x88EB
-#define GL_PIXEL_PACK_BUFFER_BINDING 0x88ED
-#define GL_DYNAMIC_READ              0x88E9
-#define GL_STREAM_READ               0x88E1
-
-typedef GLvoid (WINAPI *glGenBuffers_pfn)(
-  GLsizei n,
-  GLuint *buffers
-);
-
-typedef GLvoid (WINAPI *glBindBuffer_pfn)(
-  GLenum target,
-  GLuint buffer
-);
-
-typedef GLvoid (WINAPI *glBufferData_pfn)(
-        GLenum  target,
-        GLsizei size,
-  const GLvoid *data,
-        GLenum  usage
-);
-
-typedef GLvoid (WINAPI *glGetBufferSubData_pfn)(
-  GLenum  target,
-  GLsizei offset,
-  GLsizei size,
-  GLvoid *data
-);
-
-typedef struct __GLsync *GLsync;
-
-typedef GLsync (WINAPI *glFenceSync_pfn)(
-  GLenum     condition,
-  GLbitfield flags
-);
-
-typedef GLenum (WINAPI *glClientWaitSync_pfn)(
-  GLsync     sync,
-  GLbitfield flags,
-  GLuint64   timeout
-);
-
-typedef GLvoid (WINAPI *glDeleteSync_pfn)(
-  GLsync sync
-);
-
-glGenBuffers_pfn       glGenBuffers       = nullptr;
-glBindBuffer_pfn       glBindBuffer       = nullptr;
-glBufferData_pfn       glBufferData       = nullptr;
-glGetBufferSubData_pfn glGetBufferSubData = nullptr;
-
-glFenceSync_pfn      glFenceSync      = nullptr;
-glClientWaitSync_pfn glClientWaitSync = nullptr;
-glDeleteSync_pfn     glDeleteSync     = nullptr;
-
-#define GL_SYNC_FLUSH_COMMANDS_BIT    0x0001
-#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
-#define GL_ALREADY_SIGNALED           0x911A
-#define GL_CONDITION_SATISFIED        0x911C
-
-
 bool wait_one_extra = false;//true;
 bool waited         = false;
-
 
 __declspec (noinline)
 GLvoid
@@ -1905,6 +1863,14 @@ glReadPixels_Detour ( GLint   x,
                       GLenum  type,
                       GLvoid* data )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glReadPixels_Original ( x, y, width, height, format, type, data );
+  }
+
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] glReadPixels (%li, %li, %li, %li, 0x%X, 0x%X, %ph) "
                   L"[Calling Thread: tid=%x]",
@@ -1918,21 +1884,26 @@ glReadPixels_Detour ( GLint   x,
   // This is designed to read a 10x10 region at the center
   //   of the screen. That of course only works if 720p is
   //     forced.
-  if (x == game_width / 2 - 5 && y == game_height / 2 - 5) {
-    x = fb_width  / 2 - 5;
-    y = fb_height / 2 - 5;
+  if (x == framebuffer.game_width / 2 - 5 && y == framebuffer.game_height / 2 - 5) {
+    x = framebuffer.real_width  / 2 - 5;
+    y = framebuffer.real_height / 2 - 5;
+
+    const int QUEUE_DEPTH = 5;
 
     static GLubyte cached_data [10 * 10 * 4] = { 0 };
-    static GLuint  pbo = 0;
+    static GLuint  pbo_idx                   =   0;
+    static GLuint  pbo [6]                   = { 0, 0, 0,
+                                                 0, 0, 0 };
 
-    if (pbo == 0) {
-      glGenBuffers (1, &pbo);
+    if (pbo [pbo_idx] == 0) {
+#define GL_STATIC_READ   0x88E5
+      glGenBuffers (1, &pbo [pbo_idx]);
 
       GLuint original_pbo;
       glGetIntegerv (GL_PIXEL_PACK_BUFFER_BINDING, (GLint *)&original_pbo);
 
-      glBindBuffer (GL_PIXEL_PACK_BUFFER, pbo);
-      glBufferData (GL_PIXEL_PACK_BUFFER, 10 * 10 * 4, nullptr, GL_DYNAMIC_READ);
+      glBindBuffer (GL_PIXEL_PACK_BUFFER, pbo [pbo_idx]);
+      glBufferData (GL_PIXEL_PACK_BUFFER, 10 * 10 * 4, nullptr, GL_STREAM_READ);
 
       glBindBuffer (GL_PIXEL_PACK_BUFFER, original_pbo);
     }
@@ -1944,10 +1915,13 @@ glReadPixels_Detour ( GLint   x,
     //
     //  On a system with sync object support, this is very efficient.
     //
-    static GLsync fence = nullptr;
-    if (fence == nullptr) {
+           GLint  fence_idx  = pbo_idx;
+
+    static GLsync fences [6] = { nullptr, nullptr, nullptr,
+                                 nullptr, nullptr, nullptr };
+
+    if (fences [fence_idx] == nullptr) {
 // For Depth of Field  (color buffers should alreaby be resolved)
-#if 1
       if (config.render.msaa_samples > 1) {
         GLuint read_fbo, draw_fbo;
         glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, (GLint *)&read_fbo);
@@ -1963,29 +1937,46 @@ glReadPixels_Detour ( GLint   x,
           glReadBuffer               (read_buffer);
         }
       }
-#endif
 
       GLuint original_pbo;
       glGetIntegerv         (GL_PIXEL_PACK_BUFFER_BINDING, (GLint *)&original_pbo);
 
-      glBindBuffer          (GL_PIXEL_PACK_BUFFER, pbo);
+      glBindBuffer          (GL_PIXEL_PACK_BUFFER, pbo [pbo_idx]);
       glReadPixels_Original (x, y, width, height, format, type, nullptr);
 
       if (glFenceSync != nullptr)
-        fence = glFenceSync (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        fences [fence_idx] = glFenceSync (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
       else
-        fence = (GLsync)0x01;
+        fences [fence_idx] = (GLsync)0x01;
 
       //dll_log.Log ( L"[GL SyncOp] Inserted fence sync (%ph) into command stream "
                     //L"for glReadPixels (...)", fence );
 
       glBindBuffer          (GL_PIXEL_PACK_BUFFER, original_pbo);
 
+      pbo_idx++;
+
+      if (pbo_idx >= QUEUE_DEPTH)
+        pbo_idx = 0;
+
     } else {
+
+      int start_idx = pbo_idx;
+
+      // Run through the entire queue, clearing all buffers with
+      //   data in them (save for the one we just queued).
+      for (int i = 0; i < QUEUE_DEPTH - 1; i++) {
+      fence_idx = start_idx + i;
+
+      if (fence_idx >= QUEUE_DEPTH)
+        fence_idx -= QUEUE_DEPTH;
+
+      if (fences [fence_idx] == 0)
+        break;
 
       GLenum status = 
         glClientWaitSync != nullptr ?
-          glClientWaitSync ( fence, 0x00/*GL_SYNC_FLUSH_COMMANDS_BIT*/, 0ULL ) :
+          glClientWaitSync ( fences [fence_idx], GL_SYNC_FLUSH_COMMANDS_BIT, 0ULL ) :
             GL_CONDITION_SATISFIED;
 
       if (status == GL_CONDITION_SATISFIED || status == GL_ALREADY_SIGNALED) {
@@ -1996,19 +1987,27 @@ glReadPixels_Detour ( GLint   x,
           //dll_log.Log (L"[GL SyncOp] ReadPixels complete...");
 
           if (glDeleteSync != nullptr)
-            glDeleteSync (fence);
+            glDeleteSync (fences [fence_idx]);
 
-          fence = nullptr;
+          fences [fence_idx] = nullptr;
 
           GLuint original_pbo;
           glGetIntegerv (GL_PIXEL_PACK_BUFFER_BINDING, (GLint *)&original_pbo);
 
-          glBindBuffer       (GL_PIXEL_PACK_BUFFER, pbo);
+          glBindBuffer       (GL_PIXEL_PACK_BUFFER, pbo [fence_idx]);
           glGetBufferSubData (GL_PIXEL_PACK_BUFFER, 0, 10 * 10 * 4, cached_data);
+          glDeleteBuffers    (1, &pbo [fence_idx]);
+          pbo [fence_idx] = 0;
           glBindBuffer       (GL_PIXEL_PACK_BUFFER, original_pbo);
+
+          pbo_idx = fence_idx + 1;
+
+          if (pbo_idx >= QUEUE_DEPTH)
+            pbo_idx = 0;
         }
       } else {
         //dll_log.Log (L"[GL SyncOp] glClientWaitSync --> %x", status);
+      }
       }
     }
 
@@ -2024,6 +2023,14 @@ GLvoid
 WINAPI
 glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glDrawArrays_Original (mode, first, count);
+  }
+
+
   bool fringed = false;
 
   if (config.render.fringe_removal && active_fbo == 2) {
@@ -2034,9 +2041,7 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
        if ( real_depth_mask &&
             real_depth_test &&
             current_textures [active_texture].tex2d.enable ) {
-
-       GLint filter;
-       glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+       GLint filter = current_textures [active_texture].tex2d.min_filter;
 
        if (filter == GL_LINEAR || filter == GL_LINEAR_MIPMAP_LINEAR || filter == GL_LINEAR_MIPMAP_NEAREST) {
        glDepthMask_Original (GL_FALSE);
@@ -2098,8 +2103,11 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
     program33_draws++;
 
   // Restore the original alpha function
-  if (fringed)
-    glAlphaFunc_Original (GL_GREATER, 0.01f);
+  if (fringed) {
+    glAlphaFunc_Original (real_alpha_test, real_alpha_ref);// GL_GREATER, 0.01f);
+    if (! real_alpha_state)
+      glDisable_Original (GL_ALPHA_TEST);
+  }
 }
 
 __declspec (noinline)
@@ -2107,6 +2115,14 @@ GLvoid
 WINAPI
 glMatrixMode_Detour (GLenum mode)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glMatrixMode_Original ( mode );
+  }
+
+
   // This is only available if GL_ARB_Imaging is, and that is pretty rare.
   if (mode == GL_COLOR)
     return;
@@ -2119,6 +2135,14 @@ GLvoid
 WINAPI
 glGetFloatv_Detour (GLenum pname, GLfloat* pparams)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glGetFloatv_Original ( pname, pparams );
+  }
+
+
   // Intel does not support this
   if (pname == GL_COLOR_MATRIX_SGI) {
     const float fZero = 0.0f;
@@ -2141,6 +2165,14 @@ GLvoid
 WINAPI
 glDeleteTextures_Detour (GLsizei n, GLuint* textures)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glDeleteTextures_Original (n, textures);
+  }
+
+
   // Don't log the craziness that happens at shutdown...
   if (n != 67551) {
     dll_log.LogEx ( true, L"[ GL Trace ] glDeleteTextures (%lu, { ",
@@ -2156,13 +2188,29 @@ glDeleteTextures_Detour (GLsizei n, GLuint* textures)
     dll_log.LogEx (false, L" })\n");
   }
 
+  else {
+    dll_log.Log (L"[ GL Trace ] glDeleteTextures (%lu, ...)", n);
+    texture_remap.remaps.clear ();
+  }
+
   for (int i = 0; i < n; i++) {
+    for (int j = 0; j < 32; j++) {
+      if (textures [i] == current_textures [j].tex2d.name) {
+        current_textures [j].tex2d.name = 0;
+      }
+    }
+
     if (ui_textures.find (textures [i]) != ui_textures.end ()) {
       //dll_log.Log (L"Deleted UI texture");
       ui_textures.erase (textures [i]);
     }
 
     msaa.deleteTexture (textures [i]);
+
+
+    texture_remap.remaps.erase (textures [i]);
+    known_textures.erase       (textures [i]);
+    thirdparty_texids.erase    (textures [i]);
 
 #if 0
     /// XXX: This probably is not necessary, we will just attach something new there anyway.
@@ -2196,6 +2244,15 @@ glTexSubImage2D_Detour ( GLenum  target,
                          GLenum  type,
                    const GLvoid* pixels )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glTexSubImage2D_Original ( target, level, xoffset, yoffset,
+                                      width, height, format, type, pixels );
+  }
+
+
   dll_log.Log (L"[ Tex Dump ] SubImage2D - Level: %li, <%li,%li>", level, xoffset, yoffset);
 
   glTexSubImage2D_Original (
@@ -2206,10 +2263,6 @@ glTexSubImage2D_Detour ( GLenum  target,
             pixels );
 }
 
-typedef GLvoid (WINAPI *glActiveTexture_pfn)(
-  GLenum texture
-);
-
 glActiveTexture_pfn glActiveTexture_Original = nullptr;
 
 __declspec (noinline)
@@ -2217,6 +2270,13 @@ GLvoid
 WINAPI
 glActiveTexture_Detour ( GLenum texture )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glActiveTexture_Original (texture);
+  }
+
   active_texture = texture-GL_TEXTURE0;
 
   glActiveTexture_Original (texture);
@@ -2228,6 +2288,13 @@ WINAPI
 glBindTexture_Detour ( GLenum target,
                        GLuint texture )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glBindTexture_Original (target, texture);
+  }
+
   // Binding texture 0 when disabling texturing is a bad practice, it seems
   //   to be corrupting other commands that assume the bound texture did not
   //     change.
@@ -2255,10 +2322,20 @@ glBindTexture_Detour ( GLenum target,
 
   GLuint actual_tex = texture_remap.getRemapped (texture);
 
-  return glBindTexture_Original (target, actual_tex);//texture);
+  glBindTexture_Original (target, actual_tex);//texture);
+
+  if (target == GL_TEXTURE_2D) {
+    GLint filter;
+
+    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+    current_textures [active_texture].tex2d.min_filter = filter;
+
+    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &filter);
+    current_textures [active_texture].tex2d.mag_filter = filter;
+  }
 }
 
-#define GL_PIXEL_UNPACK_BUFFER_BINDING 0x88EF
+#pragma intrinsic (_ReturnAddress)
 
 __declspec (noinline)
 GLvoid
@@ -2273,16 +2350,28 @@ glTexImage2D_Detour ( GLenum  target,
                       GLenum  type,
                 const GLvoid* data )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glTexImage2D_Original ( target, level, internalformat, width, height,
+                                   border, format, type, data );
+  }
+
+  extern LPVOID __PP_end_img_addr;
+
   // I am almost positive that no code should intentionally be
   //   attempting to do this.
-  if (current_textures [active_texture].tex2d.name == 0) {
-    dll_log.Log ( L"[GL Texture] Ignoring request to modify GL's default texture <",
+  if (target == GL_TEXTURE_2D && current_textures [active_texture].tex2d.name == 0) {
+    dll_log.Log ( L"[GL Texture] Ignoring request to modify GL's default texture <"
                   L"glTexImage2D (...)>" );
     return;
   }
 
-  // TODO: Use return address to determine this instead.
-  if (internalformat != GL_RGBA8) {
+  //
+  // Only cache stuff that came from the game!
+  //
+  if (target == GL_TEXTURE_2D && internalformat != GL_RGBA8) {
     PPrinny_TEX_UploadTextureImage2D (
       target,
         level,
@@ -2293,7 +2382,12 @@ glTexImage2D_Detour ( GLenum  target,
                   (void *)data,
                     format, type );
   } else {
-    thirdparty_texids.insert (current_textures [active_texture].tex2d.name);
+    PPrinny_TEX_DisableMipmapping ();
+
+    if (target == GL_TEXTURE_RECTANGLE)
+      thirdparty_texids.insert (current_textures [active_texture].texRect.name);
+    else
+      thirdparty_texids.insert (current_textures [active_texture].tex2d.name);
 
     //dll_log.Log (L"[SteamOvrly] Assuming upload is from 3rd party software -- IntFmt: %x, Fmt: %x, Target: %x, data: %ph, texId: %lu",
       //internalformat, format, target, data, current_textures [active_texture].tex2d.name );
@@ -2316,6 +2410,13 @@ WINAPI
 glDeleteRenderbuffers_Detour (       GLsizei n,
                                const GLuint* renderbuffers )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glDeleteRenderbuffers_Original (n, renderbuffers);
+  }
+
   // Run through the list and look for any MSAA-backed RBOs so we do not
   //   leak VRAM.
   for (int i = 0; i < n; i++) {
@@ -2334,13 +2435,21 @@ glRenderbufferStorage_Detour (
   GLsizei width,
   GLsizei height )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glRenderbufferStorage_Original ( target, internalformat,
+                                            width, height );
+  }
+
   dll_log.Log ( L"[GL Surface]  >> Render Buffer - Internal Format: %s",
                   PP_GL_InternalFormat_ToStr (internalformat).c_str () );
 
   if (internalformat == GL_DEPTH_COMPONENT)
     internalformat = PP_DEPTH_FORMAT;
-  if (width == game_width && height == game_height) {
-    width = fb_width; height = fb_height;
+  if (width == framebuffer.game_width && height == framebuffer.game_height) {
+    width = framebuffer.real_width; height = framebuffer.real_height;
 
     msaa.createRenderbuffer (internalformat, width, height);
   }
@@ -2363,6 +2472,17 @@ glBlitFramebuffer_Detour (
   GLbitfield mask,
   GLenum     filter )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glBlitFramebuffer_Original ( srcX0, srcY0,
+                                        srcX1, srcY1,
+                                        dstX0, dstY0,
+                                        dstX1, dstY1,
+                                        mask, filter );
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log (L"[GL CallLog] -- glBlitFramebuffer (%li, %li, %li, %li, %li,"
                                                     L"%li, %li, %li, %li, %X)",
@@ -2404,6 +2524,14 @@ glCopyTexSubImage2D_Detour (
   GLsizei height
 )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glCopyTexSubImage2D_Original ( target, level, xoffset, yoffset,
+                                          x, y, width, height );
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] -- glCopyTexSubImage2D (%x, %li, %li, %li, %li, %li, %li, %li)",
                     target, level,
@@ -2421,8 +2549,8 @@ BEGIN_TASK_TIMING
       GLPerf::timers [GLPerf::TASK_BEGIN_POSTPROC]->requestTimestamp ();
 END_TASK_TIMING
 
-    width  = fb_width;
-    height = fb_height;
+    width  = framebuffer.real_width;
+    height = framebuffer.real_height;
 
 // For Depth of Field to Work
 #if 1
@@ -2459,6 +2587,13 @@ GLvoid
 WINAPI
 glScissor_Detour (GLint x, GLint y, GLsizei width, GLsizei height)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glScissor_Original ( x, y, width, height );
+  }
+
   //dll_log.Log (L"[GL CallLog] -- glScissor (%li, %li, %li, %li)",
     //x, y,
     //width, height);
@@ -2471,14 +2606,21 @@ GLvoid
 WINAPI
 glViewport_Detour (GLint x, GLint y, GLsizei width, GLsizei height)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glViewport_Original ( x, y, width, height );
+  }
+
   if (pp::RenderFix::tracer.log)
     dll_log.Log ( L"[ GL Trace ] -- glViewport (%lu, %lu, %lu, %lu)",
                     x, y,
                       width, height );
 
-  if (width == game_width && height == game_height) {
-    width  = fb_width;
-    height = fb_height;
+  if (width == framebuffer.game_width && height == framebuffer.game_height) {
+    width  = framebuffer.real_width;
+    height = framebuffer.real_height;
 
     drawing_main_scene = true;
   } else {
@@ -2497,6 +2639,13 @@ glUniformMatrix4fv_Detour (
         GLboolean  transpose,
   const GLfloat   *value )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glUniformMatrix4fv_Original (location, count, transpose, value);
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] -- glUniformMatrix4fv (Uniform Loc=%li, count=%li, transpose=%s)",
                       location, count, transpose ? L"yes" : L"no" );
@@ -2522,6 +2671,13 @@ glUniformMatrix3fv_Detour (
         GLboolean  transpose,
   const GLfloat   *value )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glUniformMatrix3fv_Original (location, count, transpose, value);
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] -- glUniformMatrix3fv (Uniform Loc=%li, count=%li, transpose=%s)",
                       location, count, transpose ? L"yes" : L"no" );
@@ -2545,6 +2701,13 @@ glVertexAttrib4f_Detour ( GLuint  index,
                           GLfloat v2,
                           GLfloat v3 )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glVertexAttrib4f_Original (index, v0, v1, v2, v3);
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"VertexAttrib4f: idx=%lu, %f, %f, %f, %f",
                   index, v0, v1, v2, v3 );
@@ -2559,6 +2722,13 @@ WINAPI
 glVertexAttrib4fv_Detour (       GLuint   index,
                            const GLfloat* v )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glVertexAttrib4fv_Original (index, v);
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"VertexAttrib4fv: idx=%lu, %f, %f, %f, %f",
                     index, v [0], v [1], v [2], v [3] );
@@ -2574,6 +2744,9 @@ glGetShaderiv_Detour ( GLuint shader,
                        GLenum pname,
                        GLint* params )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
   return glGetShaderiv_Original (shader, pname, params);
 }
 
@@ -2655,6 +2828,13 @@ WINAPI
 glAttachShader_Detour ( GLuint program,
                         GLuint shader )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glAttachShader_Original (program, shader);
+  }
+
 // Only Program #33 writes to normal / position
 #if 0
   if (shader == 16)
@@ -2673,6 +2853,13 @@ glShaderSource_Detour (        GLuint   shader,
                         const GLubyte **string,
                         const  GLint   *length )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glShaderSource_Original ( shader, count, string, length );
+  }
+
   uint32_t checksum = crc32 (0x00, (const void *)*string, strlen ((const char *)*string));
 
 #if 0
@@ -2687,18 +2874,25 @@ glShaderSource_Detour (        GLuint   shader,
   char szShaderName [MAX_PATH];
   sprintf (szShaderName, "shaders/%X.glsl", checksum);
 
-  char* szShaderSrc = _strdup ((const char *)*string);
-  char* szTexWidth  =  strstr (szShaderSrc, "const float texWidth = 720.0;  ");
+  GLint type;
+  glGetShaderiv_Original (shader, GL_SHADER_TYPE, &type);
 
-  if (szTexWidth != nullptr) {
-    char szNewWidth [33];
-    sprintf (szNewWidth, "const float texWidth = %7.1f;", (float)config.render.scene_res_y);
-    memcpy (szTexWidth, szNewWidth, 31);
-  }
+  char szFullShaderName [MAX_PATH];
+  sprintf ( szFullShaderName, "shaders/%s_%X.glsl",
+              type == GL_VERTEX_SHADER ? "Vertex" :
+                                         "Fragment",
+                checksum );
+
+  char* szShaderFile = nullptr;
+
+  if (GetFileAttributesA (szFullShaderName) != INVALID_FILE_ATTRIBUTES)
+    szShaderFile = szFullShaderName;
+  else if (GetFileAttributesA (szShaderName) != INVALID_FILE_ATTRIBUTES)
+    szShaderFile = szShaderName;
 
 
-  if (GetFileAttributesA (szShaderName) != INVALID_FILE_ATTRIBUTES) {
-    FILE* fShader = fopen (szShaderName, "rb");
+  if (szShaderFile != nullptr) {
+    FILE* fShader = fopen (szShaderFile, "rb");
 
     if (fShader != nullptr) {
                     fseek  (fShader, 0, SEEK_END);
@@ -2715,11 +2909,22 @@ glShaderSource_Detour (        GLuint   shader,
 
         glShaderSource_Original (shader, count, (const GLubyte **)&szSrc, length);
 
-        free (szShaderSrc);
         free (szSrc);
 
         return;
       }
+    }
+  }
+
+  char* szShaderSrc = _strdup ((const char *)*string);
+
+  if (type == GL_FRAGMENT_SHADER) {
+    char* szTexWidth  =  strstr (szShaderSrc, "const float texWidth = 720.0;  ");
+
+    if (szTexWidth != nullptr) {
+      char szNewWidth [33];
+      sprintf (szNewWidth, "const float texWidth = %7.1f;", (float)config.render.scene_res_y);
+      memcpy (szTexWidth, szNewWidth, 31);
     }
   }
 
@@ -2829,6 +3034,10 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     glGenBuffers =
       (glGenBuffers_pfn)
         wglGetProcAddress_Original ("glGenBuffers");
+
+    glDeleteBuffers =
+      (glDeleteBuffers_pfn)
+        wglGetProcAddress_Original ("glDeleteBuffers");
 
     glBindBuffer =
       (glBindBuffer_pfn)
@@ -2995,6 +3204,13 @@ GLvoid
 WINAPI
 glFinish_Detour (void)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glFinish_Original ();
+  }
+
   if (config.compatibility.allow_gl_cpu_sync)
     glFinish_Original ();
 }
@@ -3004,6 +3220,13 @@ GLvoid
 WINAPI
 glFlush_Detour (void)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glFlush_Original ();
+  }
+
   if (config.compatibility.allow_gl_cpu_sync)
     glFlush_Original ();
 }
@@ -3013,6 +3236,13 @@ GLvoid
 WINAPI
 glLoadMatrixf_Detour (const GLfloat* m)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glLoadMatrixf_Original (m);
+  }
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] glLoadMatrixf -- %11.6f %11.6f %11.6f %11.6f",
                     m [ 0], m [ 1], m [ 2], m [ 3] );
@@ -3053,6 +3283,15 @@ glOrtho_Detour
   GLdouble bottom,  GLdouble top,
   GLdouble nearVal, GLdouble farVal )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glOrtho_Original ( left,    right,
+                              bottom,  top,
+                              nearVal, farVal );
+  }
+
   if (left == right)
     right = left + DBL_EPSILON;
 
@@ -3075,6 +3314,14 @@ glScalef_Detour ( GLfloat x,
                   GLfloat y,
                   GLfloat z )
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glScalef_Original ( x, y, z );
+  }
+
+
   if (pp::RenderFix::tracer.log) {
     dll_log.Log ( L"[ GL Trace ] glScalef -- %11.6f %11.6f %11.6f",
                     x, y, z );
@@ -3088,6 +3335,14 @@ GLvoid
 WINAPI
 glClear_Detour (GLbitfield mask)
 {
+  if (current_dc == 0 || current_glrc == 0)
+    return;
+
+  if (current_dc != game_dc || current_glrc != game_glrc) {
+    return glClear_Original ( mask );
+  }
+
+
   //if (active_fbo == 1)
   mask &= ~(GL_STENCIL_BUFFER_BIT);
 
@@ -3202,6 +3457,11 @@ wglCreateContext_Detour (HDC hDC)
     wglMakeCurrent           (NULL, NULL);
   }
 
+  if (game_glrc == 0) {
+    game_dc   = hDC;
+    game_glrc = ret;
+  }
+
   return ret;
 }
 
@@ -3212,19 +3472,11 @@ wglCopyContext_Detour ( HGLRC hglrcSrc,
                         HGLRC hglrcDst,
                         UINT  mask )
 {
-  if (config.compatibility.optimize_ctx_mgmt)
-    return TRUE;
+  //if (config.compatibility.optimize_ctx_mgmt)
+    //return TRUE;
 
   return wglCopyContext_Original (hglrcSrc, hglrcDst, mask);
 }
-
-#ifdef RESPONSIBLE_CTX_MGMT
-__declspec (thread) HDC   current_dc;
-__declspec (thread) HGLRC current_glrc;
-#else
-HDC   current_dc;
-HGLRC current_glrc;
-#endif
 
 __declspec (noinline)
 BOOL
@@ -3232,14 +3484,19 @@ WINAPI
 wglMakeCurrent_Detour ( HDC   hDC,
                         HGLRC hGLRC )
 {
-  if (! config.compatibility.optimize_ctx_mgmt) {
-    return wglMakeCurrent_Original (hDC, hGLRC);
-  }
+//  if (! config.compatibility.optimize_ctx_mgmt) {
+//    return wglMakeCurrent_Original (hDC, hGLRC);
+//  }
 
   //dll_log.Log ( L"[ GL Trace ] wglMakeCurrent (%Xh, %Xh) <tid=%X>",
                   //hDC,
                     //hGLRC,
                       //GetCurrentThreadId () );
+
+  if (game_glrc == 0 && hGLRC != 0) {
+    game_dc   = hDC;
+    game_glrc = hGLRC;
+  }
 
 #ifdef RESPONSIBLE_CTX_MGMT
   if (current_dc != hDC/* || current_glrc != hGLRC*/) {
@@ -3276,6 +3533,7 @@ PP_InitGLHooks (void)
                               "BMF_EndBufferSwap",
                                OGLEndFrame_Post,
                      (LPVOID*)&BMF_EndBufferSwap );
+
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
                               "glPixelMapfv",
@@ -3455,6 +3713,8 @@ PP_InitGLHooks (void)
                    (LPVOID *)&wglGetProcAddress_Original );
 }
 
+HWND hWndDummy = 0;
+
 void
 PP_InitGL (void)
 {
@@ -3474,13 +3734,16 @@ PP_InitGL (void)
     return;
   }
 
-  CreateWindowW ( wc.lpszClassName,
-                    L"Dummy_Pretty_Prinny",
-                      WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                        0,0,
+  hWndDummy = 
+    CreateWindowW ( wc.lpszClassName,
+                      L"Dummy_Pretty_Prinny",
+                        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                           0,0,
                             0,0,
-                              hInstance,0);
+                              0,0,
+                                hInstance,0);
+
+  DestroyWindow (hWndDummy);
 }
 
 LRESULT
@@ -3565,9 +3828,11 @@ Dummy_WndProc ( HWND   hWnd,
     } break;
 
     default:
+      pp::window.WndProc_Original = nullptr;
       return DefWindowProc (hWnd, message, wParam, lParam);
   }
 
+  pp::window.WndProc_Original = nullptr;
   return 0;
 }
 

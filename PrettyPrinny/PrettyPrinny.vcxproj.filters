@@ -66,6 +66,9 @@
     <ClInclude Include="render\gl_perf.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="render\textures.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">

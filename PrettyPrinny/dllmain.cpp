@@ -90,9 +90,10 @@ DllThread (LPVOID user)
   // Plugin State
   if (PPrinny_Init_MinHook () == MH_OK) {
 
+    // This also locates the highest image address, so we can
+    //   factor out the Steam overlay from certain hooks...
     extern bool PPrinny_PatchDamageCrash (void);
-    if (config.compatibility.patch_damage_bug)
-      PPrinny_PatchDamageCrash ();
+    PPrinny_PatchDamageCrash ();
 
     pp::DisplayFix::Init    ();
     pp::RenderFix::Init     ();
