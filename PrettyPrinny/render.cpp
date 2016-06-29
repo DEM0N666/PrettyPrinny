@@ -60,6 +60,18 @@ tracer_s         pp::RenderFix::tracer;
 pp_draw_states_s pp::RenderFix::draw_state;
 pp_framebuffer_s pp::RenderFix::framebuffer;
 
+struct known_glsl_programs_s {
+  struct {
+    std::unordered_set <GLuint> programs;
+    std::unordered_set <GLuint> shaders;
+  } ssao;
+
+  struct {
+    std::unordered_set <GLuint> programs;
+    std::unordered_set <GLuint> shaders;
+  } shadow;
+} static known_glsl;
+
 #define PP_DEPTH_FORMAT       GL_DEPTH_COMPONENT/*24*/
 
 glGenRenderbuffers_pfn               glGenRenderbuffers                 = nullptr;
@@ -158,6 +170,16 @@ BMF_BeginBufferSwap_pfn              BMF_BeginBufferSwap                = nullpt
 BMF_EndBufferSwap_pfn                BMF_EndBufferSwap                  = nullptr;
 
 glClear_pfn                          glClear_Original                   = nullptr;
+
+typedef GLvoid (WINAPI *glMemoryBarrier_pfn)(
+  GLbitfield barriers
+);
+
+glMemoryBarrier_pfn                  glMemoryBarrier                    = nullptr;
+
+#define GL_TEXTURE_UPDATE_BARRIER_BIT 0x0100
+#define GL_FRAMEBUFFER_BARRIER_BIT    0x0400
+
 
 #include <map>
 #include <unordered_set>
@@ -324,9 +346,13 @@ PPrinny_TEX_ConvertPalettedToBGRA ( GLsizei  width,
     out_img [ i     ] = max (0, min (255, 255 * palette [512 + entry]));
     out_img [ i + 3 ] = max (0, min (255, 255 * palette [768 + entry]));
 #else
-    out_img [ i + 2 ] = 255 * palette [000 + entry];
-    out_img [ i + 1 ] = 255 * palette [256 + entry];
-    out_img [ i     ] = 255 * palette [512 + entry];
+    const bool premultiplied = false;
+
+    float alpha = premultiplied ? palette [768 + entry] : 1.0f;
+
+    out_img [ i + 2 ] = 255 * palette [000 + entry] * alpha;
+    out_img [ i + 1 ] = 255 * palette [256 + entry] * alpha;
+    out_img [ i     ] = 255 * palette [512 + entry] * alpha;
     out_img [ i + 3 ] = 255 * palette [768 + entry];
 
 #endif
@@ -405,12 +431,13 @@ PPrinny_TEX_DisableMipmapping (void)
 void
 PPrinny_TEX_GenerateMipmap (GLsizei width, GLsizei height)
 {
+#if 1
   //glTexParameteri ( GL_TEXTURE_2D,
                       //GL_TEXTURE_MIN_LOD,
                         //0 );
   glTexParameteri ( GL_TEXTURE_2D,
                       GL_TEXTURE_MAX_LEVEL,
-                        max (0, (int)floor (log2 (max (width,height)))));
+                        max (0, (int)log2 (max (width,height) - 1)));
 
   glGenerateMipmap ( GL_TEXTURE_2D );
 
@@ -422,12 +449,14 @@ PPrinny_TEX_GenerateMipmap (GLsizei width, GLsizei height)
                           (float)lod_bias );
   }
 
-  // We cannot mipmap normal maps, because that would require re-normalization
-  if ( active_texture != 0 ||
-       thirdparty_texids.count (
-         current_textures [active_texture].tex2d.name ) ) {
+  if ( /*active_texture == 1 ||*/
+         thirdparty_texids.count (
+           current_textures [active_texture].tex2d.name ) ) {
     PPrinny_TEX_DisableMipmapping ();
   }
+#else
+  PPrinny_TEX_DisableMipmapping ();
+#endif
 }
 
 std::unordered_set <GLuint> known_textures;
@@ -439,7 +468,7 @@ PPrinny_TEX_CopyTexState ( GLuint srcTex,
   GLint num_levels;
   GLint states [4];
 
-  glBindTexture_Original (GL_TEXTURE_2D, srcTex);
+  glBindTexture_Original (GL_TEXTURE_2D, dstTex);//srcTex);
 
   for (int i = 0; i < 4; i++)
     glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER+i, &states [i]);
@@ -449,9 +478,12 @@ PPrinny_TEX_CopyTexState ( GLuint srcTex,
   glBindTexture_Original (GL_TEXTURE_2D, dstTex);
 
   for (int i = 0; i < 4; i++)
-    glTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER+i, &states [i]);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER+i, states [i]);
 
-  glTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, &num_levels);
+  if (num_levels != 1000)
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, num_levels);
+  else
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 }
 
 bool
@@ -893,12 +925,12 @@ PPrinny_TEX_UploadTextureImage2D ( GLenum  target,
   // Mipmap Generation
   //
   if (config.textures.force_mipmaps) {
-    if ( data != nullptr && texId < 67551) {
+    if ( data != nullptr /*&& texId < 67551*/) {
       PPrinny_TEX_GenerateMipmap (width, height);
       ////////dll_log.Log (L"[GL Texture] Generated mipmaps (on data upload) for Uncompressed TexID=%lu", texId);
     }
   } else {
-    PPrinny_TEX_DisableMipmapping ();
+    //PPrinny_TEX_DisableMipmapping ();
   }
 }
 
@@ -946,8 +978,7 @@ OGLEndFrame_Post (HRESULT hr, IUnknown* pDev)
   pp::RenderFix::draw_state.frames++;
   pp::RenderFix::draw_state.thread = GetCurrentThreadId ();
 
-  HRESULT ret = BMF_EndBufferSwap (S_OK, nullptr);
-
+  glFlush_Original ();
 
   // Additional text that we can print below the command console
   extern std::string mod_text;
@@ -1045,6 +1076,8 @@ IF_NO_TASK_TIMING
   // Clear the OSD if this is turned off...
   mod_text = "";
 END_TASK_TIMING
+
+  HRESULT ret = BMF_EndBufferSwap (S_OK, nullptr);
 
   return ret;
 }
@@ -1888,7 +1921,7 @@ glReadPixels_Detour ( GLint   x,
     x = framebuffer.real_width  / 2 - 5;
     y = framebuffer.real_height / 2 - 5;
 
-    const int QUEUE_DEPTH = 5;
+    const int QUEUE_DEPTH = 4;
 
     static GLubyte cached_data [10 * 10 * 4] = { 0 };
     static GLuint  pbo_idx                   =   0;
@@ -1965,14 +1998,14 @@ glReadPixels_Detour ( GLint   x,
 
       // Run through the entire queue, clearing all buffers with
       //   data in them (save for the one we just queued).
-      for (int i = 0; i < QUEUE_DEPTH - 1; i++) {
+      for (int i = 0; i < QUEUE_DEPTH/2; i++) {
       fence_idx = start_idx + i;
 
       if (fence_idx >= QUEUE_DEPTH)
         fence_idx -= QUEUE_DEPTH;
 
       if (fences [fence_idx] == 0)
-        break;
+        continue;
 
       GLenum status = 
         glClientWaitSync != nullptr ?
@@ -1996,14 +2029,16 @@ glReadPixels_Detour ( GLint   x,
 
           glBindBuffer       (GL_PIXEL_PACK_BUFFER, pbo [fence_idx]);
           glGetBufferSubData (GL_PIXEL_PACK_BUFFER, 0, 10 * 10 * 4, cached_data);
-          glDeleteBuffers    (1, &pbo [fence_idx]);
-          pbo [fence_idx] = 0;
+          //glDeleteBuffers    (1, &pbo [fence_idx]);
+          //pbo [fence_idx] = 0;
           glBindBuffer       (GL_PIXEL_PACK_BUFFER, original_pbo);
 
           pbo_idx = fence_idx + 1;
 
           if (pbo_idx >= QUEUE_DEPTH)
             pbo_idx = 0;
+
+          break;
         }
       } else {
         //dll_log.Log (L"[GL SyncOp] glClientWaitSync --> %x", status);
@@ -2030,10 +2065,25 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
     return glDrawArrays_Original (mode, first, count);
   }
 
-
   bool fringed = false;
 
-  if (config.render.fringe_removal && active_fbo == 2) {
+  if (known_glsl.ssao.programs.count (active_program)) {
+    if (glMemoryBarrier != nullptr)
+      glMemoryBarrier ( GL_TEXTURE_UPDATE_BARRIER_BIT );
+
+    glPushAttrib (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDepthMask  (GL_FALSE);
+    glDisable    (GL_DEPTH_TEST);
+    glColorMaski (1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glColorMaski (2, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glColorMaski (3, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glColorMaski (4, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glColorMaski (5, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glColorMaski (6, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glColorMaski (7, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+  }
+
+  else if (config.render.fringe_removal && active_fbo == 2) {
     bool world  = (mode == GL_TRIANGLES);// && count < 180);//      && count == 6);
     bool sprite = (mode == GL_TRIANGLE_STRIP && count == 4);
 
@@ -2107,6 +2157,12 @@ glDrawArrays_Detour (GLenum mode, GLint first, GLsizei count)
     glAlphaFunc_Original (real_alpha_test, real_alpha_ref);// GL_GREATER, 0.01f);
     if (! real_alpha_state)
       glDisable_Original (GL_ALPHA_TEST);
+  }
+
+  if (known_glsl.ssao.programs.count (active_program)) {
+    if (glMemoryBarrier != nullptr)
+      glMemoryBarrier ( GL_FRAMEBUFFER_BARRIER_BIT );
+    glPopAttrib ();
   }
 }
 
@@ -2835,6 +2891,17 @@ glAttachShader_Detour ( GLuint program,
     return glAttachShader_Original (program, shader);
   }
 
+  // Mark this program as including SSAO if one of its shaders
+  //   does.
+  if (known_glsl.ssao.shaders.count (shader)) {
+    known_glsl.ssao.programs.insert (program);
+  }
+
+  if (known_glsl.shadow.shaders.count (shader)) {
+    known_glsl.shadow.programs.insert (program);
+  }
+
+
 // Only Program #33 writes to normal / position
 #if 0
   if (shader == 16)
@@ -2859,7 +2926,6 @@ glShaderSource_Detour (        GLuint   shader,
   if (current_dc != game_dc || current_glrc != game_glrc) {
     return glShaderSource_Original ( shader, count, string, length );
   }
-
   uint32_t checksum = crc32 (0x00, (const void *)*string, strlen ((const char *)*string));
 
 #if 0
@@ -2868,6 +2934,17 @@ glShaderSource_Detour (        GLuint   shader,
                     shader );
   }
 #endif
+
+  if ( strstr ( (const char *)*string,
+         "col *= ( 1.0 - ssaoTest( gl_TexCoord[0] ));") ) {
+    known_glsl.ssao.shaders.insert (shader);
+  }
+
+  if ( strstr ( (const char *)*string,
+         "float calcShadowCoef()") ) {
+    known_glsl.shadow.shaders.insert (shader);
+  }
+
 
   PPrinny_DumpShader (checksum, shader, (const char *)*string);
 
@@ -2918,6 +2995,13 @@ glShaderSource_Detour (        GLuint   shader,
 
   char* szShaderSrc = _strdup ((const char *)*string);
 
+  //
+  // This is more or less obsolete because all of the shaders that used this
+  //   now use textureSize (..., 0) for proper texture coordinate math.
+  //
+  //  * Minimum GLSL version is now 1.30 (GL 3.0), but those are the advertised
+  //      system requirements anyway, so I have not lost any sleep.
+  //
   if (type == GL_FRAGMENT_SHADER) {
     char* szTexWidth  =  strstr (szShaderSrc, "const float texWidth = 720.0;  ");
 
@@ -3063,6 +3147,10 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     glDeleteSync =
       (glDeleteSync_pfn)
         wglGetProcAddress ("glDeleteSync");
+
+    glMemoryBarrier =
+      (glMemoryBarrier_pfn)
+        wglGetProcAddress ("glMemoryBarrier");
   }
 
   PROC ret = wglGetProcAddress_Original (szFuncName);
