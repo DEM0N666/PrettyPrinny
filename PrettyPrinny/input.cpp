@@ -35,6 +35,8 @@
 
 #include "input.h"
 
+#include <process.h>
+
 #include <mmsystem.h>
 #pragma comment (lib, "winmm.lib")
 
@@ -990,12 +992,13 @@ void
 pp::InputManager::Hooker::Start (void)
 {
   hMsgPump =
-    CreateThread ( NULL,
-                     NULL,
-                       Hooker::MessagePump,
-                         &hooks,
-                           NULL,
-                             NULL );
+    (HANDLE)
+      _beginthreadex ( nullptr,
+                         0,
+                           Hooker::MessagePump,
+                             &hooks,
+                               0x00,
+                                 nullptr );
 }
 
 void
@@ -1053,8 +1056,8 @@ pp::InputManager::Hooker::Draw (void)
   BMF_DrawExternalOSD ("Pretty Prinny", output.c_str ());
 }
 
-DWORD
-WINAPI
+unsigned int
+__stdcall
 pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
 {
   hooks_s* pHooks = (hooks_s *)hook_ptr;
@@ -1078,9 +1081,9 @@ pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
       GetWindowThreadProcessId (GetForegroundWindow (), &dwProc);
 
     // Ugly hack, but a different window might be in the foreground...
-    if (dwProc != GetCurrentProcessId ()) {
+    if (pp::window.WndProc_Original == nullptr || dwProc != GetCurrentProcessId ()) {
       //dll_log.Log (L" *** Tried to hook the wrong process!!!");
-      Sleep (5000);
+      Sleep (83UL);
       continue;
     }
 
@@ -1151,10 +1154,8 @@ pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
                   hits > 1 ? L"tries" : L"try",
                     timeGetTime () - dwTime );
 
-  while (true) {
-    Sleep (15);
-  }
-  //193 - 199
+  Sleep (INFINITE);
+  _endthreadex (0);
 
   return 0;
 }

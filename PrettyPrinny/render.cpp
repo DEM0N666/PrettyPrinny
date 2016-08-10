@@ -166,8 +166,8 @@ wglCreateContext_pfn                 wglCreateContext_Original          = nullpt
 wglCopyContext_pfn                   wglCopyContext_Original            = nullptr;
 wglMakeCurrent_pfn                   wglMakeCurrent_Original            = nullptr;
 
-BMF_BeginBufferSwap_pfn              BMF_BeginBufferSwap                = nullptr;
-BMF_EndBufferSwap_pfn                BMF_EndBufferSwap                  = nullptr;
+SK_BeginBufferSwap_pfn               SK_BeginBufferSwap                = nullptr;
+SK_EndBufferSwap_pfn                 SK_EndBufferSwap                  = nullptr;
 
 glClear_pfn                          glClear_Original                   = nullptr;
 
@@ -962,7 +962,7 @@ END_TASK_TIMING
   void PPrinny_DrawCommandConsole (void);
   PPrinny_DrawCommandConsole ();
 
-  return BMF_BeginBufferSwap ();
+  return SK_BeginBufferSwap ();
 }
 
 COM_DECLSPEC_NOTHROW
@@ -1004,7 +1004,12 @@ BEGIN_TASK_TIMING
       GLuint64 pp_start, pp_end;
       GLuint64 ui_start, ui_end;
 
-     static DWORD         dwTime = timeGetTime ();
+     
+
+
+
+
+static DWORD         dwTime = timeGetTime ();
      static unsigned char spin    = 193;
 
      if (dwTime < timeGetTime ()-100UL)
@@ -1077,7 +1082,7 @@ IF_NO_TASK_TIMING
   mod_text = "";
 END_TASK_TIMING
 
-  HRESULT ret = BMF_EndBufferSwap (S_OK, nullptr);
+  HRESULT ret = SK_EndBufferSwap (S_OK, nullptr);
 
   return ret;
 }
@@ -3613,14 +3618,14 @@ void
 PP_InitGLHooks (void)
 {
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
-                              "BMF_BeginBufferSwap",
+                              "SK_BeginBufferSwap",
                                OGLEndFrame_Pre,
-                     (LPVOID*)&BMF_BeginBufferSwap );
+                     (LPVOID*)&SK_BeginBufferSwap );
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),
-                              "BMF_EndBufferSwap",
+                              "SK_EndBufferSwap",
                                OGLEndFrame_Post,
-                     (LPVOID*)&BMF_EndBufferSwap );
+                     (LPVOID*)&SK_EndBufferSwap );
 
 
       PPrinny_CreateDLLHook ( config.system.injector.c_str (),

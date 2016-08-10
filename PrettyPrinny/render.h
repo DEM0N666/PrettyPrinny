@@ -111,9 +111,9 @@ namespace pp
   }
 }
 
-typedef void (STDMETHODCALLTYPE *BMF_BeginBufferSwap_pfn)(void);
+typedef void (STDMETHODCALLTYPE *SK_BeginBufferSwap_pfn)(void);
 
-typedef HRESULT (STDMETHODCALLTYPE *BMF_EndBufferSwap_pfn)
+typedef HRESULT (STDMETHODCALLTYPE *SK_EndBufferSwap_pfn)
 (
   HRESULT   hr,
   IUnknown *device
@@ -732,8 +732,8 @@ extern wglCreateContext_pfn                 wglCreateContext_Original;
 extern wglCopyContext_pfn                   wglCopyContext_Original;
 extern wglMakeCurrent_pfn                   wglMakeCurrent_Original;
 
-extern BMF_BeginBufferSwap_pfn              BMF_BeginBufferSwap;
-extern BMF_EndBufferSwap_pfn                BMF_EndBufferSwap;
+extern SK_BeginBufferSwap_pfn               SK_BeginBufferSwap;
+extern SK_EndBufferSwap_pfn                 SK_EndBufferSwap;
 
 extern glClear_pfn                          glClear_Original;
 

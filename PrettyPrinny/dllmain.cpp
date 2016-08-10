@@ -124,8 +124,6 @@ DllMain (HMODULE hModule,
       // This is safe because this DLL is never loaded at launch, it is always
       //   loaded from OpenGL32.dll
       DllThread (nullptr);
-
-      //CreateThread              (nullptr, 0, DllThread, nullptr, 0, nullptr);
     } break;
 
     case DLL_PROCESS_DETACH:

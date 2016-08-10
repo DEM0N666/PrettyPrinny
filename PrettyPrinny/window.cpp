@@ -97,7 +97,7 @@ SetWindowPos_Detour(
     _In_     UINT uFlags)
 {
   BOOL bRet;
-  //SetWindowLongA (hWnd, GWL_STYLE, 0);
+  SetWindowLongA (hWnd, GWL_STYLE, 0);
 
   if (config.window.borderless /*&& windowed*/) {
     HMONITOR hMonitor = 
