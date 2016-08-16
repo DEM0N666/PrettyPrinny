@@ -667,7 +667,7 @@ PPrinny_TEX_UploadTextureImage2D ( GLenum  target,
         //
         // Gamepad Button Texture
         // 
-        if (checksum == 0x7BE1DE43) {
+        if (checksum == 0x7BE1DE43 || checksum == 0x95DBEDA5) {
           int      size, width, height;
           int      bpp;
           uint8_t  type_ [4];
@@ -974,6 +974,8 @@ OGLEndFrame_Post (HRESULT hr, IUnknown* pDev)
     if (--pp::RenderFix::tracer.count == 0)
       pp::RenderFix::tracer.log = false;
   }
+
+  pp::window.hwnd = WindowFromDC (wglGetCurrentDC ());
 
   pp::RenderFix::draw_state.frames++;
   pp::RenderFix::draw_state.thread = GetCurrentThreadId ();

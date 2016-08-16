@@ -27,6 +27,8 @@
 #include <dinput.h>
 #pragma comment (lib, "dxguid.lib")
 
+#pragma comment (lib, "dinput8.lib")
+
 #include "log.h"
 #include "config.h"
 #include "window.h"
@@ -39,6 +41,10 @@
 
 #include <mmsystem.h>
 #pragma comment (lib, "winmm.lib")
+
+
+extern HMODULE        hDLLMod;
+LPDIRECTINPUTDEVICE8W g_DI8Key = nullptr;
 
 
 
@@ -255,21 +261,6 @@ IDirectInputDevice8_GetDeviceState_Detour ( LPDIRECTINPUTDEVICE        This,
 
   if (SUCCEEDED (hr)) {
     if (pp::window.active && This == _dim.pDev) {
-//
-// This is only for mouselook, etc. That stuff works fine without aspect ratio correction.
-//
-//#define FIX_DINPUT8_MOUSE
-#ifdef FIX_DINPUT8_MOUSE
-      if (cbData == sizeof (DIMOUSESTATE) || cbData == sizeof (DIMOUSESTATE2)) {
-        POINT mouse_pos { ((DIMOUSESTATE *)lpvData)->lX,
-                          ((DIMOUSESTATE *)lpvData)->lY };
-
-        pp::InputManager::CalcCursorPos (&mouse_pos);
-
-        ((DIMOUSESTATE *)lpvData)->lX = mouse_pos.x;
-        ((DIMOUSESTATE *)lpvData)->lY = mouse_pos.y;
-      }
-#endif
       memcpy (&_dim.state, lpvData, cbData);
     }
 
@@ -328,19 +319,10 @@ IDirectInput8_CreateDevice_Detour ( IDirectInput8       *This,
                                                            pUnkOuter ) );
 
   if (SUCCEEDED (hr)) {
+    void** vftable = *(void***)*lplpDirectInputDevice;
+
+    if (rguid == GUID_SysKeyboard) {
 #if 1
-      void** vftable = *(void***)*lplpDirectInputDevice;
-
-// We do not need to hook this for ToS
-#if 0
-      PPrinny_CreateFuncHook ( L"IDirectInputDevice8::GetDeviceState",
-                               vftable [9],
-                               IDirectInputDevice8_GetDeviceState_Detour,
-                     (LPVOID*)&IDirectInputDevice8_GetDeviceState_Original );
-
-      PPrinny_EnableHook (vftable [9]);
-#endif
-
       PPrinny_CreateFuncHook ( L"IDirectInputDevice8::SetCooperativeLevel",
                                vftable [13],
                                IDirectInputDevice8_SetCooperativeLevel_Detour,
@@ -348,18 +330,13 @@ IDirectInput8_CreateDevice_Detour ( IDirectInput8       *This,
 
       PPrinny_EnableHook (vftable [13]);
 #else
-     DI8_VIRTUAL_OVERRIDE ( lplpDirectInputDevice, 9,
-                            L"IDirectInputDevice8::GetDeviceState",
-                            IDirectInputDevice8_GetDeviceState_Detour,
-                            IDirectInputDevice8_GetDeviceState_Original,
-                            IDirectInputDevice8_GetDeviceState_pfn );
-
-     DI8_VIRTUAL_OVERRIDE ( lplpDirectInputDevice, 13,
+      DI8_VIRTUAL_OVERRIDE ( lplpDirectInputDevice, 13,
                             L"IDirectInputDevice8::SetCooperativeLevel",
                             IDirectInputDevice8_SetCooperativeLevel_Detour,
                             IDirectInputDevice8_SetCooperativeLevel_Original,
                             IDirectInputDevice8_SetCooperativeLevel_pfn );
 #endif
+    }
 
     if (rguid == GUID_SysMouse)
       _dim.pDev = *lplpDirectInputDevice;
@@ -897,21 +874,6 @@ void
 pp::InputManager::Init (void)
 {
   //
-  // For this game, the only reason we hook this is to block the Windows key.
-  //
-  if (config.input.block_windows) {
-    //
-    // We only hook one DLL export from DInput8, all other DInput stuff is
-    //   handled through virtual function table overrides
-    //
-    PPrinny_CreateDLLHook ( L"dinput8.dll", "DirectInput8Create",
-                            DirectInput8Create_Detour,
-                  (LPVOID*)&DirectInput8Create_Original,
-                  (LPVOID*)&DirectInput8Create_Hook );
-    PPrinny_EnableHook    (DirectInput8Create_Hook);
-  }
-
-  //
   // Win32 API Input Hooks
   //
 
@@ -920,31 +882,6 @@ pp::InputManager::Init (void)
   PPrinny_CreateDLLHook ( L"user32.dll", "GetAsyncKeyState",
                           GetAsyncKeyState_Detour,
                 (LPVOID*)&GetAsyncKeyState_Original );
-
-#if 0
-  PPrinny_CreateDLLHook ( L"user32.dll", "ClipCursor",
-                          ClipCursor_Detour,
-                (LPVOID*)&ClipCursor_Original );
-
-#if 0
-  PPrinny_CreateDLLHook ( L"user32.dll", "GetCursorInfo",
-                          GetCursorInfo_Detour,
-                (LPVOID*)&GetCursorInfo_Original );
-
-  PPrinny_CreateDLLHook ( L"user32.dll", "GetCursorPos",
-                          GetCursorPos_Detour,
-                (LPVOID*)&GetCursorPos_Original );
-#endif
-
-  PPrinny_CreateDLLHook ( L"user32.dll", "SetCursorPos",
-                          SetCursorPos_Detour,
-                (LPVOID*)&SetCursorPos_Original );
-
-  PPrinny_CreateDLLHook ( L"user32.dll", "SetPhysicalCursorPos",
-                          SetPhysicalCursorPos_Detour,
-                (LPVOID*)&SetPhysicalCursorPos_Original );
-#endif
-
 
   HMODULE hModXInput13 = LoadLibraryW (L"XInput1_3.dll");
 
@@ -985,6 +922,11 @@ pp::InputManager::Shutdown (void)
   pp::InputManager::Hooker* pHook = pp::InputManager::Hooker::getInstance ();
 
   pHook->End ();
+
+  if (g_DI8Key != nullptr) {
+    g_DI8Key->Release ();
+    g_DI8Key = nullptr;
+  }
 }
 
 
@@ -1015,13 +957,13 @@ std::string mod_text ("");
 void
 pp::InputManager::Hooker::Draw (void)
 {
-  typedef BOOL (__stdcall *BMF_DrawExternalOSD_t)(std::string app_name, std::string text);
+  typedef BOOL (__stdcall *SK_DrawExternalOSD_pfn)(std::string app_name, std::string text);
 
   static HMODULE               hMod =
     GetModuleHandle (config.system.injector.c_str ());
-  static BMF_DrawExternalOSD_t BMF_DrawExternalOSD
+  static SK_DrawExternalOSD_pfn SK_DrawExternalOSD
     =
-    (BMF_DrawExternalOSD_t)GetProcAddress (hMod, "BMF_DrawExternalOSD");
+    (SK_DrawExternalOSD_pfn)GetProcAddress (hMod, "SK_DrawExternalOSD");
 
   std::string output;
 
@@ -1053,7 +995,7 @@ pp::InputManager::Hooker::Draw (void)
   output += "\n";
   output += mod_text;
 
-  BMF_DrawExternalOSD ("Pretty Prinny", output.c_str ());
+  SK_DrawExternalOSD ("Pretty Prinny", output.c_str ());
 }
 
 unsigned int
@@ -1078,10 +1020,10 @@ pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
     DWORD dwProc;
 
     dwThreadId =
-      GetWindowThreadProcessId (GetForegroundWindow (), &dwProc);
+      GetWindowThreadProcessId (pp::window.hwnd, &dwProc);
 
     // Ugly hack, but a different window might be in the foreground...
-    if (pp::window.WndProc_Original == nullptr || dwProc != GetCurrentProcessId ()) {
+    if (pp::window.hwnd == nullptr || (! pp::RenderFix::draw_state.frames) || dwProc != GetCurrentProcessId ()) {
       //dll_log.Log (L" *** Tried to hook the wrong process!!!");
       Sleep (83UL);
       continue;
@@ -1124,35 +1066,51 @@ pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
     Sleep (1);
   }
 
-// No need to hook the mousey right now..
-#if 0
-  while (! (pHooks->mouse = SetWindowsHookEx ( WH_MOUSE,
-                                                  MouseProc,
-                                                    hDLLMod,
-                                                      dwThreadId ))) {
-    _com_error err (HRESULT_FROM_WIN32 (GetLastError ()));
-
-    dll_log.Log ( L"  @ SetWindowsHookEx failed: 0x%04X (%s)",
-                  err.WCode (), err.ErrorMessage () );
-
-    ++hits;
-
-    if (hits >= 5) {
-      dll_log.Log ( L"  * Failed to install mouse hook after %lu tries... "
-        L"bailing out!",
-        hits );
-      return 0;
-    }
-
-    Sleep (1);
-  }
-#endif
-
   dll_log.Log ( L"[   Input  ] * Installed keyboard hook for command console... "
                       L"%lu %s (%lu ms!)",
                 hits,
                   hits > 1 ? L"tries" : L"try",
                     timeGetTime () - dwTime );
+
+  CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+
+  IDirectInput8W* pDInput8 = nullptr;
+
+  HRESULT hr =
+    CoCreateInstance ( CLSID_DirectInput8,
+                         nullptr,
+                           CLSCTX_INPROC_SERVER,
+                             IID_IDirectInput8,
+                               (LPVOID *)&pDInput8 );
+
+  if (SUCCEEDED (hr)) {
+    void** vftable = *(void***)*&pDInput8;
+
+    pDInput8->Initialize (GetModuleHandle (nullptr), DIRECTINPUT_VERSION);
+
+    PPrinny_CreateFuncHook ( L"IDirectInput8::CreateDevice",
+                           vftable [3],
+                           IDirectInput8_CreateDevice_Detour,
+                 (LPVOID*)&IDirectInput8_CreateDevice_Original );
+
+    PPrinny_EnableHook (vftable [3]);
+
+    if (FAILED (pDInput8->CreateDevice (GUID_SysKeyboard, &g_DI8Key, nullptr))) {
+      g_DI8Key = nullptr;
+    }
+
+    if (g_DI8Key != nullptr) {
+      g_DI8Key->SetDataFormat (&c_dfDIKeyboard);
+
+      g_DI8Key->SetCooperativeLevel (
+        pp::window.hwnd,
+          DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY );
+
+      g_DI8Key->Release ();
+    }
+
+    pDInput8->Release ();
+  }
 
   Sleep (INFINITE);
   _endthreadex (0);
@@ -1173,7 +1131,7 @@ LRESULT
 CALLBACK
 pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
 {
-  if (nCode == 0 /*nCode >= 0 && (nCode != HC_NOREMOVE)*/) {
+  if (nCode >= 0 /*nCode >= 0 && (nCode != HC_NOREMOVE)*/) {
     BYTE    vkCode   = LOWORD (wParam) & 0xFF;
     BYTE    scanCode = HIWORD (lParam) & 0x7F;
     SHORT   repeated = LOWORD (lParam);
@@ -1274,16 +1232,16 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
              new_press ) {
           visible = ! visible;
 
-          // Avoid duplicating a BMF feature
-          static HMODULE hD3D9 = GetModuleHandle (config.system.injector.c_str ());
+          // Avoid duplicating a SK feature
+          static HMODULE hOpenGL = GetModuleHandle (config.system.injector.c_str ());
 
-          typedef void (__stdcall *BMF_SteamAPI_SetOverlayState_t)(bool);
-          static BMF_SteamAPI_SetOverlayState_t BMF_SteamAPI_SetOverlayState =
-              (BMF_SteamAPI_SetOverlayState_t)
-                GetProcAddress ( hD3D9,
-                                    "BMF_SteamAPI_SetOverlayState" );
+          typedef void (__stdcall *SK_SteamAPI_SetOverlayState_pfn)(bool);
+          static SK_SteamAPI_SetOverlayState_pfn SK_SteamAPI_SetOverlayState =
+              (SK_SteamAPI_SetOverlayState_pfn)
+                GetProcAddress ( hOpenGL,
+                                    "SK_SteamAPI_SetOverlayState" );
 
-          BMF_SteamAPI_SetOverlayState (visible);
+          SK_SteamAPI_SetOverlayState (visible);
 
           // Prevent the Steam Overlay from being a real pain
           return -1;
@@ -1294,12 +1252,6 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
           pCommandProc->ProcessCommandLine ("Trace.Enable true");
         }
 
-// Not really that useful, and we want the 'B' key for something else
-#if 0
-        else if (keys_ [VK_MENU] && vkCode == 'B' && new_press) {
-          pCommandProc->ProcessCommandLine ("Render.AllowBG toggle");
-        }
-#endif
         else if (vkCode == 'H' && new_press) {
           pCommandProc->ProcessCommandLine ("Render.HighPrecisionSSAO toggle");
         }
