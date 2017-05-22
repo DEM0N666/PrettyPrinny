@@ -568,7 +568,7 @@ DetourWindowProc ( _In_  HWND   hWnd,
   //   this opportunity to setup a special framerate limit.
   //
   if (pp::window.active != last_active) {
-    eTB_CommandProcessor* pCommandProc =
+    SK_ICommandProcessor* pCommandProc =
       SK_GetCommandProcessor           ();
 
 #if 0
@@ -779,14 +779,17 @@ pp::WindowManager::Init (void)
   else
     window.style = 0x90CA0000;
 
+#if 0
   PPrinny_CreateDLLHook ( L"user32.dll", "SetWindowLongA",
                           SetWindowLongA_Detour,
                 (LPVOID*)&SetWindowLongA_Original );
+#endif
 
   PPrinny_CreateDLLHook ( L"user32.dll", "keybd_event",
                           keybd_event_Detour,
                 (LPVOID*)&keybd_event_Original );
 
+#if 0
   PPrinny_CreateDLLHook ( L"user32.dll", "SetWindowPos",
                           SetWindowPos_Detour,
                 (LPVOID*)&SetWindowPos_Original );
@@ -798,6 +801,7 @@ pp::WindowManager::Init (void)
   PPrinny_CreateDLLHook ( L"user32.dll", "GetForegroundWindow",
                           GetForegroundWindow_Detour,
                 (LPVOID*)&GetForegroundWindow_Original );
+#endif
 
 #if 0
 // Used, but not for anything important...
@@ -822,10 +826,10 @@ pp::WindowManager::Shutdown (void)
 pp::WindowManager::
   CommandProcessor::CommandProcessor (void)
 {
-  foreground_fps_ = new eTB_VarStub <float> (&config.window.foreground_fps, this);
-  background_fps_ = new eTB_VarStub <float> (&config.window.background_fps, this);
+  foreground_fps_ = PP_CreateVar (SK_IVariable::Float, &config.window.foreground_fps, this);
+  background_fps_ = PP_CreateVar (SK_IVariable::Float, &config.window.background_fps, this);
 
-  eTB_CommandProcessor* pCommandProc = SK_GetCommandProcessor ();
+  SK_ICommandProcessor* pCommandProc = SK_GetCommandProcessor ();
 
   pCommandProc->AddVariable ("Window.BackgroundFPS", background_fps_);
   pCommandProc->AddVariable ("Window.ForegroundFPS", foreground_fps_);
@@ -837,9 +841,9 @@ pp::WindowManager::
 
 bool
   pp::WindowManager::
-    CommandProcessor::OnVarChange (eTB_Variable* var, void* val)
+    CommandProcessor::OnVarChange (SK_IVariable* var, void* val)
 {
-  eTB_CommandProcessor* pCommandProc = SK_GetCommandProcessor ();
+  SK_ICommandProcessor* pCommandProc = SK_GetCommandProcessor ();
 
   bool known = false;
 

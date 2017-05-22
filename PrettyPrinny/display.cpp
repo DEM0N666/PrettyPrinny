@@ -219,6 +219,7 @@ GetSystemMetrics_Detour (_In_ int nIndex)
 void
 pp::DisplayFix::Init (void)
 {
+#if 0
   PPrinny_CreateDLLHook ( L"user32.dll",
                           "GetSystemMetrics",
                           GetSystemMetrics_Detour,
@@ -233,6 +234,7 @@ pp::DisplayFix::Init (void)
                           "EnumDisplaySettingsA",
                           EnumDisplaySettingsA_Detour,
                (LPVOID *)&EnumDisplaySettingsA_Original );
+#endif
 }
 
 void

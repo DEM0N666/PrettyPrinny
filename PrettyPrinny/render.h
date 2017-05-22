@@ -79,11 +79,11 @@ namespace pp
     void Init     ();
     void Shutdown ();
 
-    class CommandProcessor : public eTB_iVariableListener {
+    class CommandProcessor : public SK_IVariableListener {
     public:
       CommandProcessor (void);
 
-      virtual bool OnVarChange (eTB_Variable* var, void* val = NULL);
+      virtual bool OnVarChange (SK_IVariable* var, void* val = NULL);
 
       static CommandProcessor* getInstance (void)
       {
@@ -107,7 +107,7 @@ namespace pp
 
     extern HMODULE             user32_dll;
 
-    extern eTB_VarStub <bool>* high_precision_ssao;
+    extern SK_IVariable*       high_precision_ssao;
   }
 }
 

@@ -738,38 +738,6 @@ GetRawInputData_Detour (_In_      HRAWINPUT hRawInput,
   return size;
 }
 
-SHORT
-WINAPI
-GetAsyncKeyState_Detour (_In_ int vKey)
-{
-#define PPrinny_ConsumeVKey(vKey) { GetAsyncKeyState_Original(vKey); return 0; }
-
-#if 0
-  // Window is not active, but we are faking it...
-  if ((! pp::window.active) && config.render.allow_background)
-    PPrinny_ConsumeVKey (vKey);
-#endif
-
-  // Block keyboard input to the game while the console is active
-  if (pp::InputManager::Hooker::getInstance ()->isVisible ()) {
-    PPrinny_ConsumeVKey (vKey);
-  }
-
-#if 0
-  // Block Left Alt
-  if (vKey == VK_LMENU)
-    if (config.input.block_left_alt)
-      PPrinny_ConsumeVKey (vKey);
-
-  // Block Left Ctrl
-  if (vKey == VK_LCONTROL)
-    if (config.input.block_left_ctrl)
-      PPrinny_ConsumeVKey (vKey);
-#endif
-
-  return GetAsyncKeyState_Original (vKey);
-}
-
 BOOL
 WINAPI
 ClipCursor_Detour (const RECT *lpRect)
@@ -878,10 +846,6 @@ pp::InputManager::Init (void)
   //
 
   HookRawInput ();
-
-  PPrinny_CreateDLLHook ( L"user32.dll", "GetAsyncKeyState",
-                          GetAsyncKeyState_Detour,
-                (LPVOID*)&GetAsyncKeyState_Original );
 
   HMODULE hModXInput13 = LoadLibraryW (L"XInput1_3.dll");
 
@@ -1034,7 +998,7 @@ pp::InputManager::Hooker::MessagePump (LPVOID hook_ptr)
 
   // Defer initialization of the Window Message redirection stuff until
   //   we have an actual window!
-  eTB_CommandProcessor* pCommandProc = SK_GetCommandProcessor ();
+  SK_ICommandProcessor* pCommandProc = SK_GetCommandProcessor ();
   pCommandProc->ProcessCommandFormatted ("TargetFPS %f", config.window.foreground_fps);
 
 
@@ -1191,7 +1155,7 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
         size_t len = strlen (text+1);
         // Don't process empty or pure whitespace command lines
         if (len > 0 && strspn (text+1, " ") != len) {
-          eTB_CommandResult result = SK_GetCommandProcessor ()->ProcessCommandLine (text+1);
+          SK_ICommandResult result = SK_GetCommandProcessor ()->ProcessCommandLine (text+1);
 
           if (result.getStatus ()) {
             // Don't repeat the same command over and over
@@ -1218,7 +1182,7 @@ pp::InputManager::Hooker::KeyboardProc (int nCode, WPARAM wParam, LPARAM lParam)
     }
 
     else if (keyDown) {
-      eTB_CommandProcessor* pCommandProc = SK_GetCommandProcessor ();
+      SK_ICommandProcessor* pCommandProc = SK_GetCommandProcessor ();
 
       bool new_press = keys_ [vkCode] != 0x81;
 

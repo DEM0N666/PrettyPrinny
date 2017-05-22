@@ -39,8 +39,43 @@
 HMODULE hDLLMod      = { 0 }; // Handle to SELF
 HMODULE hInjectorDLL = { 0 }; // Handle to Special K
 
-typedef void (__stdcall *SK_SetPluginName_pfn)(std::wstring name);
-SK_SetPluginName_pfn SK_SetPluginName = nullptr;
+typedef HRESULT (__stdcall *SK_UpdateSoftware_pfn)(const wchar_t* wszProduct);
+typedef bool    (__stdcall *SK_FetchVersionInfo_pfn)(const wchar_t* wszProduct);
+
+std::wstring injector_dll;
+
+typedef void (__stdcall *SKX_SetPluginName_pfn)(std::wstring name);
+SKX_SetPluginName_pfn SKX_SetPluginName = nullptr;
+
+__declspec (dllexport)
+BOOL
+WINAPI
+SKPlugIn_Shutdown (LPVOID* lpReserved)
+{
+  UNREFERENCED_PARAMETER (lpReserved);
+
+#if 0
+  pp::WindowManager::Shutdown ();
+  pp::RenderFix::Shutdown     ();
+  pp::InputManager::Shutdown  ();
+  pp::TimingFix::Shutdown     ();
+#endif
+  pp::DisplayFix::Shutdown    ();
+
+  PPrinny_UnInit_MinHook ();
+  PPrinny_SaveConfig     ();
+
+  dll_log.LogEx ( false, L"============ (Version:  v %s) "
+                         L"============\n",
+                           PPRINNY_VER_STR.c_str () );
+  dll_log.LogEx ( true,  L"End PrettyPrinny.dll\n" );
+  dll_log.LogEx ( false, L"-------------- [Pretty Prinny] "
+                         L"--------------\n" );
+
+  dll_log.close ();
+
+  return TRUE;
+}
 
 DWORD
 WINAPI
@@ -71,21 +106,18 @@ DllThread (LPVOID user)
   hInjectorDLL =
     GetModuleHandle (config.system.injector.c_str ());
 
-  SK_SetPluginName = 
-    (SK_SetPluginName_pfn)
-      GetProcAddress (hInjectorDLL, "SK_SetPluginName");
+  SKX_SetPluginName = 
+    (SKX_SetPluginName_pfn)
+      GetProcAddress (hInjectorDLL, "SKX_SetPluginName");
+  SK_GetCommandProcessor =
+    (SK_GetCommandProcessor_pfn)
+      GetProcAddress (hInjectorDLL, "SK_GetCommandProcessor");
 
   //
   // If this is NULL, the injector system isn't working right!!!
   //
-  if (SK_SetPluginName != nullptr)
-    SK_SetPluginName (plugin_name);
-
-  //
-  // Kill Raptr instead of it killing us!
-  //
-  extern void PPrinny_InitCompatBlacklist (void);
-  PPrinny_InitCompatBlacklist ();
+  if (SKX_SetPluginName != nullptr)
+    SKX_SetPluginName (plugin_name);
 
   // Plugin State
   if (PPrinny_Init_MinHook () == MH_OK) {
@@ -107,6 +139,30 @@ DllThread (LPVOID user)
   return 0;
 }
 
+__declspec (dllexport)
+BOOL
+WINAPI
+SKPlugIn_Init (HMODULE hModSpecialK)
+{
+  wchar_t wszSKFileName [ MAX_PATH + 2] = { L'\0' };
+          wszSKFileName [   MAX_PATH  ] =   L'\0';
+
+  GetModuleFileName (hModSpecialK, wszSKFileName, MAX_PATH - 1);
+
+  injector_dll = wszSKFileName;
+
+  hInjectorDLL = hModSpecialK;
+
+#if 1
+  DllThread (nullptr);
+#else
+  _beginthreadex ( nullptr, 0, DllThread, nullptr, 0x00, nullptr );
+#endif
+
+  return TRUE;
+}
+
+
 BOOL
 APIENTRY
 DllMain (HMODULE hModule,
@@ -117,34 +173,11 @@ DllMain (HMODULE hModule,
   {
     case DLL_PROCESS_ATTACH:
     {
-      DisableThreadLibraryCalls (hModule);
-
       hDLLMod = hModule;
-
-      // This is safe because this DLL is never loaded at launch, it is always
-      //   loaded from OpenGL32.dll
-      DllThread (nullptr);
     } break;
 
     case DLL_PROCESS_DETACH:
     {
-      pp::WindowManager::Shutdown ();
-      pp::RenderFix::Shutdown     ();
-      pp::InputManager::Shutdown  ();
-      pp::TimingFix::Shutdown     ();
-      pp::DisplayFix::Shutdown    ();
-
-      PPrinny_UnInit_MinHook ();
-      PPrinny_SaveConfig     ();
-
-      dll_log.LogEx ( false, L"============ (Version:  v %s) "
-                             L"============\n",
-                               PPRINNY_VER_STR.c_str () );
-      dll_log.LogEx ( true,  L"End PrettyPrinny.dll\n" );
-      dll_log.LogEx ( false, L"-------------- [Pretty Prinny] "
-                             L"--------------\n" );
-
-      dll_log.close ();
     } break;
   }
 

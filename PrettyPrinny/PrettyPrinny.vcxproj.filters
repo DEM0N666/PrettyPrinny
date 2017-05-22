@@ -132,4 +132,9 @@
   <ItemGroup>
     <Library Include="MinHook\lib\libMinHook.x86.lib" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="symbols.def">
+      <Filter>Resource Files</Filter>
+    </None>
+  </ItemGroup>
 </Project>

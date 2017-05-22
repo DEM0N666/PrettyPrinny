@@ -3024,6 +3024,8 @@ glShaderSource_Detour (        GLuint   shader,
   free (szShaderSrc);
 }
 
+#include <set>
+
 PROC
 WINAPI
 wglGetProcAddress_Detour (LPCSTR szFuncName)
@@ -3282,12 +3284,19 @@ wglGetProcAddress_Detour (LPCSTR szFuncName)
     detoured = true;
   }
 
-  dll_log.LogEx (true, L"[OpenGL Ext] %#32hs => %ph", szFuncName, ret);
+  static std::set <std::string> funcs;
 
-  if (detoured)
-    dll_log.LogEx (false, L"    {Detoured}\n");
-  else
-    dll_log.LogEx (false, L"\n");
+  if (! funcs.count (szFuncName))
+  {
+    dll_log.LogEx (true, L"[OpenGL Ext] %#32hs => %ph", szFuncName, ret);
+
+    if (detoured)
+      dll_log.LogEx (false, L"    {Detoured}\n");
+    else
+      dll_log.LogEx (false, L"\n");
+
+    funcs.emplace (szFuncName);
+  }
 
   return ret;
 }
@@ -3939,22 +3948,22 @@ pp::RenderFix::Init (void)
   PP_InitGL ();
 
   CommandProcessor*     comm_proc    = CommandProcessor::getInstance ();
-  eTB_CommandProcessor* pCommandProc = SK_GetCommandProcessor        ();
+  SK_ICommandProcessor* pCommandProc = SK_GetCommandProcessor        ();
 
   // Don't directly modify this state, switching mid-frame would be disasterous...
-  pCommandProc->AddVariable ("Render.MSAA",             new eTB_VarStub <bool> (&msaa.use));
+  pCommandProc->AddVariable ("Render.MSAA",             PP_CreateVar (SK_IVariable::Boolean, (&msaa.use)));
 
-  pCommandProc->AddVariable ("Render.FringeRemoval",    new eTB_VarStub <bool> (&config.render.fringe_removal));
+  pCommandProc->AddVariable ("Render.FringeRemoval",    PP_CreateVar (SK_IVariable::Boolean, &config.render.fringe_removal));
 
-  pCommandProc->AddVariable ("Trace.NumFrames",         new eTB_VarStub <int>  (&tracer.count));
-  pCommandProc->AddVariable ("Trace.Enable",            new eTB_VarStub <bool> (&tracer.log));
+  pCommandProc->AddVariable ("Trace.NumFrames",         PP_CreateVar (SK_IVariable::Int,     &tracer.count));
+  pCommandProc->AddVariable ("Trace.Enable",            PP_CreateVar (SK_IVariable::Boolean, &tracer.log));
 
-  pCommandProc->AddVariable ("Render.ConservativeMSAA", new eTB_VarStub <bool> (&config.render.conservative_msaa));
-  pCommandProc->AddVariable ("Render.EarlyResolve",     new eTB_VarStub <bool> (&msaa.early_resolve));
+  pCommandProc->AddVariable ("Render.ConservativeMSAA", PP_CreateVar (SK_IVariable::Boolean, &config.render.conservative_msaa));
+  pCommandProc->AddVariable ("Render.EarlyResolve",     PP_CreateVar (SK_IVariable::Boolean, &msaa.early_resolve));
 
-  pCommandProc->AddVariable ("Render.AggressiveOpt",    new eTB_VarStub <bool> (&config.compatibility.aggressive_opt));
-  pCommandProc->AddVariable ("Render.TaskTiming",       new eTB_VarStub <bool> (&GLPerf::time_tasks));
-  pCommandProc->AddVariable ("Render.FastTexUploads",   new eTB_VarStub <bool> (&config.textures.caching));
+  pCommandProc->AddVariable ("Render.AggressiveOpt",    PP_CreateVar (SK_IVariable::Boolean,&config.compatibility.aggressive_opt));
+  pCommandProc->AddVariable ("Render.TaskTiming",       PP_CreateVar (SK_IVariable::Boolean,&GLPerf::time_tasks));
+  pCommandProc->AddVariable ("Render.FastTexUploads",   PP_CreateVar (SK_IVariable::Boolean,&config.textures.caching));
 }
 
 void
@@ -3966,7 +3975,7 @@ float ar;
 
 pp::RenderFix::CommandProcessor::CommandProcessor (void)
 {
-  eTB_CommandProcessor* pCommandProc =
+  SK_ICommandProcessor* pCommandProc =
     SK_GetCommandProcessor ();
 
 // NOT IMPLEMENTED IN THIS GAME (Yet?)
@@ -3979,13 +3988,13 @@ pp::RenderFix::CommandProcessor::CommandProcessor (void)
 #endif
 
   high_precision_ssao =
-    new eTB_VarStub <bool> (&config.render.high_precision_ssao, this);
+    PP_CreateVar (SK_IVariable::Boolean, &config.render.high_precision_ssao, this);
 
   pCommandProc->AddVariable ("Render.HighPrecisionSSAO", high_precision_ssao);
 }
 
 bool
-pp::RenderFix::CommandProcessor::OnVarChange (eTB_Variable* var, void* val)
+pp::RenderFix::CommandProcessor::OnVarChange (SK_IVariable* var, void* val)
 {
   if (var == high_precision_ssao) {
     if (val != nullptr) {
@@ -4005,7 +4014,7 @@ pp::RenderFix::CommandProcessor::OnVarChange (eTB_Variable* var, void* val)
 pp::RenderFix::CommandProcessor*
            pp::RenderFix::CommandProcessor::pCommProc = nullptr;
 
-eTB_VarStub <bool>*
+SK_IVariable*
            pp::RenderFix::high_precision_ssao         = nullptr;
 
 HWND     pp::RenderFix::hWndDevice       = NULL;
